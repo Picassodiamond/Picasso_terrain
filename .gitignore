@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+examples/sample.dxf
+examples/sample_contours.geojson
+examples/demo/
+data/
+dist/
+build/
+web/node_modules/
+web/dist/
+web/e2e/screenshots/

@@ -1,0 +1,181 @@
+/** Typed client for the PLM FastAPI backend (same origin, cookie session). */
+
+export class ApiError extends Error {
+  status: number;
+  detail: string;
+  constructor(status: number, detail: string) {
+    super(`${status}: ${detail}`);
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+export interface User { id: string; username: string; role: string; organisation: string; authenticated: boolean }
+export interface AuthStatus { auth_enabled: boolean; open_registration: boolean; users: number; version: string }
+export interface CrsInfo { spec: string; name: string; is_local: boolean; epsg: number | null; proj4?: string | null; is_geographic?: boolean }
+export interface ProjectSummary { points: number; lines: Record<string, number>; tin_runs: number; contour_sets: number; alignments: number; section_sets: number; bounds: number[] | null; z_range: number[] | null }
+export interface Project { id: string; name: string; description: string; crs: string; crs_info: CrsInfo; created: string; updated: string; settings: Record<string, unknown>; summary: ProjectSummary }
+export interface Job { id: string; project_id: string; kind: string; status: string; progress: number; message: string; params: Record<string, unknown>; result: Record<string, any> | null; error: string | null; created: string }
+export interface TinRun { id: number; created: string; name: string; params: Record<string, unknown>; stats: Record<string, number>; n_nodes: number; n_triangles: number; bounds: (number | null)[]; z_range: (number | null)[]; issues_count: number; issues: { kind: string; x: number; y: number; message: string }[] }
+export interface ContourStyle { major_color: string; minor_color: string; major_width: number; minor_width: number; ramp: string | null; opacity: number; label_format: string; label_prefix: string; label_suffix: string; label_every: number; label_major_only: boolean; text_height: number; show_labels: boolean }
+export interface ContourSet { id: number; run_id: number; created: string; name: string; params: Record<string, any>; style: Partial<ContourStyle>; n_lines: number; levels: number[] }
+export interface IPIn { x: number; y: number; radius: number; label: string }
+export interface Alignment { id: number; name: string; start_chainage: number; end_chainage: number; length: number; valid: boolean; ips: IPIn[]; geometry: any[]; elements: any[]; key_points: any[]; issues: { ip_index: number; kind: string; message: string }[]; style: Record<string, unknown>; lock: Lock | null; version: number | null; created?: string; updated?: string }
+export interface Lock { project_id: string; target_type: string; target_id: string; user_id: string; username: string; acquired: string; expires: string }
+export interface ProfilePoint { chainage: number; x: number; y: number; z: number | null; source: string }
+export interface Section { chainage: number; label: string; centre: number[]; direction: number; left: number; right: number; offset: number[]; z: (number | null)[]; xy: number[][]; source: string[] }
+export interface SectionSet { id: number; alignment_id: number; run_id: number; created: string; name: string; params: Record<string, any>; summary: Record<string, any>; profile?: ProfilePoint[]; sections?: Section[] }
+export interface Comment { id: string; project_id: string; user_id: string | null; username: string | null; target_type: string; target_id: string; parent_id: string | null; x: number | null; y: number | null; chainage: number | null; text: string; resolved: boolean; created: string; updated: string }
+export interface Activity { id: number; username: string | null; action: string; target_type: string; target_id: string; detail: Record<string, any>; created: string }
+export interface Member { user_id: string; username: string; role: string; organisation: string; added: string }
+export type FeatureCollection = { type: "FeatureCollection"; features: any[] };
+
+async function request<T>(method: string, url: string, body?: unknown, init: RequestInit = {}): Promise<T> {
+  const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
+  let payload: BodyInit | undefined;
+  if (body instanceof FormData) payload = body;
+  else if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    payload = JSON.stringify(body);
+  }
+  const res = await fetch(url, { method, body: payload, credentials: "same-origin", ...init, headers });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const j = await res.json();
+      detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail ?? j);
+    } catch { /* ignore */ }
+    throw new ApiError(res.status, detail);
+  }
+  if (res.status === 204) return undefined as T;
+  const ct = res.headers.get("content-type") || "";
+  if (ct.includes("json")) return (await res.json()) as T;
+  if (ct.includes("octet-stream")) return (await res.arrayBuffer()) as T;
+  return (await res.text()) as T;
+}
+
+const q = (params: Record<string, unknown>) => {
+  const s = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== "") s.set(k, String(v));
+  const t = s.toString();
+  return t ? `?${t}` : "";
+};
+
+export const api = {
+  health: () => request<{ status: string; version: string; auth_enabled: boolean }>("GET", "/api/health"),
+  auth: {
+    status: () => request<AuthStatus>("GET", "/api/auth/status"),
+    me: () => request<User>("GET", "/api/auth/me"),
+    login: (username: string, password: string) => request<User>("POST", "/api/auth/login", { username, password }),
+    register: (username: string, password: string, organisation: string) => request<User>("POST", "/api/auth/register", { username, password, organisation }),
+    logout: () => request<{ ok: boolean }>("POST", "/api/auth/logout"),
+  },
+  crs: {
+    presets: () => request<{ key: string; name: string; definition: string | null; description: string }[]>("GET", "/api/crs/presets"),
+    describe: (spec: string) => request<CrsInfo>("GET", `/api/crs/describe${q({ spec })}`),
+  },
+  projects: {
+    list: () => request<Project[]>("GET", "/api/projects"),
+    create: (body: { name: string; crs: string; description?: string }) => request<Project>("POST", "/api/projects", body),
+    get: (id: string) => request<Project>("GET", `/api/projects/${id}`),
+    update: (id: string, body: Record<string, unknown>) => request<Project>("PATCH", `/api/projects/${id}`, body),
+    delete: (id: string) => request<void>("DELETE", `/api/projects/${id}`),
+  },
+  data: {
+    import: (pid: string, file: File, form: Record<string, string | boolean | undefined>) => {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      for (const [k, v] of Object.entries(form)) if (v !== undefined && v !== "") fd.append(k, String(v));
+      return request<{ points_added: number; lines_added: Record<string, number>; warnings: string[]; summary: ProjectSummary }>("POST", `/api/projects/${pid}/import`, fd);
+    },
+    points: (pid: string, layer?: string) => request<FeatureCollection>("GET", `/api/projects/${pid}/points.geojson${q({ layer })}`),
+    pointLayers: (pid: string) => request<{ layer: string; n: number; zmin: number; zmax: number }[]>("GET", `/api/projects/${pid}/points/layers`),
+    deletePoints: (pid: string, params: Record<string, unknown>) => request<{ deleted: number }>("DELETE", `/api/projects/${pid}/points${q(params)}`),
+    lines: (pid: string, kind?: string) => request<FeatureCollection>("GET", `/api/projects/${pid}/lines.geojson${q({ kind })}`),
+    lineSummary: (pid: string) => request<{ kind: string; layer: string; n: number; vertices: number }[]>("GET", `/api/projects/${pid}/lines/summary`),
+    addLine: (pid: string, body: { kind: string; layer?: string; name?: string; coords: number[][] }) => request<{ added: number }>("POST", `/api/projects/${pid}/lines`, body),
+    deleteLines: (pid: string, params: Record<string, unknown>) => request<{ deleted: number }>("DELETE", `/api/projects/${pid}/lines${q(params)}`),
+    updateLine: (pid: string, fid: number, params: Record<string, unknown>) => request<{ ok: boolean }>("PATCH", `/api/projects/${pid}/lines/${fid}${q(params)}`),
+    pointsCsvUrl: (pid: string) => `/api/projects/${pid}/points.csv`,
+  },
+  tin: {
+    create: (pid: string, body: Record<string, unknown>) => request<Job>("POST", `/api/projects/${pid}/tin`, body),
+    list: (pid: string) => request<TinRun[]>("GET", `/api/projects/${pid}/tin`),
+    get: (pid: string, run: number) => request<TinRun>("GET", `/api/projects/${pid}/tin/${run}`),
+    delete: (pid: string, run: number) => request<void>("DELETE", `/api/projects/${pid}/tin/${run}`),
+    mesh: (pid: string, run: number) => request<ArrayBuffer>("GET", `/api/projects/${pid}/tin/${run}/mesh.bin`),
+    hull: (pid: string, run: number) => request<FeatureCollection>("GET", `/api/projects/${pid}/tin/${run}/hull.geojson`),
+    issues: (pid: string, run: number) => request<FeatureCollection>("GET", `/api/projects/${pid}/tin/${run}/issues.geojson`),
+    elevation: (pid: string, run: number, x: number, y: number) => request<{ z: number | null; inside: boolean }>("GET", `/api/projects/${pid}/tin/${run}/elevation${q({ x, y })}`),
+    profile: (pid: string, run: number, coords: number[][]) => request<{ distance: number[]; z: (number | null)[]; xy: number[][]; length: number }>("POST", `/api/projects/${pid}/tin/${run}/profile`, { coords }),
+  },
+  contours: {
+    create: (pid: string, body: Record<string, unknown>) => request<Job>("POST", `/api/projects/${pid}/contours`, body),
+    list: (pid: string) => request<ContourSet[]>("GET", `/api/projects/${pid}/contours`),
+    get: (pid: string, id: number) => request<ContourSet>("GET", `/api/projects/${pid}/contours/${id}`),
+    patch: (pid: string, id: number, body: Record<string, unknown>) => request<ContourSet>("PATCH", `/api/projects/${pid}/contours/${id}`, body),
+    delete: (pid: string, id: number) => request<void>("DELETE", `/api/projects/${pid}/contours/${id}`),
+    geojson: (pid: string, id: number) => request<FeatureCollection>("GET", `/api/projects/${pid}/contours/${id}.geojson${q({ ndigits: 3 })}`),
+    labels: (pid: string, id: number, every?: number) => request<FeatureCollection>("GET", `/api/projects/${pid}/contours/${id}/labels.geojson${q({ every })}`),
+  },
+  alignments: {
+    list: (pid: string) => request<Alignment[]>("GET", `/api/projects/${pid}/alignments`),
+    create: (pid: string, body: Record<string, unknown>) => request<Alignment>("POST", `/api/projects/${pid}/alignments`, body),
+    preview: (pid: string, body: Record<string, unknown>) => request<Alignment>("POST", `/api/projects/${pid}/alignments/preview`, body),
+    get: (pid: string, id: number) => request<Alignment>("GET", `/api/projects/${pid}/alignments/${id}`),
+    update: (pid: string, id: number, body: Record<string, unknown>, note = "") => request<Alignment>("PUT", `/api/projects/${pid}/alignments/${id}${q({ note })}`, body),
+    delete: (pid: string, id: number) => request<void>("DELETE", `/api/projects/${pid}/alignments/${id}`),
+    geometry: (pid: string, id: number, chainage_interval = 20) => request<FeatureCollection>("GET", `/api/projects/${pid}/alignments/${id}/geometry.geojson${q({ chainage_interval })}`),
+    importFile: (pid: string, file: File, form: Record<string, string>) => {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      for (const [k, v] of Object.entries(form)) if (v) fd.append(k, v);
+      return request<Alignment>("POST", `/api/projects/${pid}/alignments/import`, fd);
+    },
+    csvUrl: (pid: string, id: number) => `/api/projects/${pid}/alignments/${id}.csv`,
+    lock: (pid: string, id: number) => request<Lock>("POST", `/api/projects/${pid}/alignments/${id}/lock`),
+    unlock: (pid: string, id: number, force = false) => request<{ released: boolean }>("DELETE", `/api/projects/${pid}/alignments/${id}/lock${q({ force })}`),
+    versions: (pid: string, id: number) => request<{ version: number; username: string | null; note: string; created: string }[]>("GET", `/api/projects/${pid}/alignments/${id}/versions`),
+    restore: (pid: string, id: number, version: number) => request<Alignment>("POST", `/api/projects/${pid}/alignments/${id}/versions/${version}/restore`, { note: "" }),
+  },
+  sections: {
+    create: (pid: string, body: Record<string, unknown>) => request<Job>("POST", `/api/projects/${pid}/sections`, body),
+    list: (pid: string, alignment_id?: number) => request<SectionSet[]>("GET", `/api/projects/${pid}/sections${q({ alignment_id })}`),
+    get: (pid: string, id: number) => request<SectionSet>("GET", `/api/projects/${pid}/sections/${id}`),
+    delete: (pid: string, id: number) => request<void>("DELETE", `/api/projects/${pid}/sections/${id}`),
+    lines: (pid: string, id: number) => request<FeatureCollection>("GET", `/api/projects/${pid}/sections/${id}/lines.geojson`),
+    profileCsvUrl: (pid: string, id: number) => `/api/projects/${pid}/sections/${id}/profile.csv`,
+    crossCsvUrl: (pid: string, id: number) => `/api/projects/${pid}/sections/${id}/cross.csv`,
+  },
+  exportUrl: {
+    dxf: (pid: string, params: Record<string, unknown>) => `/api/projects/${pid}/export.dxf${q(params)}`,
+    gpkg: (pid: string) => `/api/projects/${pid}/export.gpkg`,
+    geojson: (pid: string) => `/api/projects/${pid}/export.geojson`,
+  },
+  jobs: {
+    get: (id: string) => request<Job>("GET", `/api/jobs/${id}`),
+    list: (pid: string) => request<Job[]>("GET", `/api/projects/${pid}/jobs`),
+  },
+  collab: {
+    members: (pid: string) => request<Member[]>("GET", `/api/projects/${pid}/members`),
+    addMember: (pid: string, username: string, role = "editor") => request<Member[]>("POST", `/api/projects/${pid}/members`, { username, role }),
+    removeMember: (pid: string, uid: string) => request<Member[]>("DELETE", `/api/projects/${pid}/members/${uid}`),
+    comments: (pid: string, params: Record<string, unknown> = {}) => request<Comment[]>("GET", `/api/projects/${pid}/comments${q(params)}`),
+    addComment: (pid: string, body: Record<string, unknown>) => request<Comment>("POST", `/api/projects/${pid}/comments`, body),
+    patchComment: (pid: string, id: string, body: Record<string, unknown>) => request<Comment>("PATCH", `/api/projects/${pid}/comments/${id}`, body),
+    deleteComment: (pid: string, id: string) => request<void>("DELETE", `/api/projects/${pid}/comments/${id}`),
+    activity: (pid: string, since = 0) => request<{ activity: Activity[]; locks: Lock[] }>("GET", `/api/projects/${pid}/activity${q({ since })}`),
+  },
+};
+
+/** Poll a job until it finishes (for background jobs). */
+export async function waitForJob(job: Job, onProgress?: (j: Job) => void, intervalMs = 1500): Promise<Job> {
+  let j = job;
+  while (j.status === "pending" || j.status === "running") {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    j = await api.jobs.get(j.id);
+    onProgress?.(j);
+  }
+  if (j.status === "error") throw new ApiError(400, j.error || "job failed");
+  return j;
+}

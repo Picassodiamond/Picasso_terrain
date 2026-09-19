@@ -1,0 +1,14 @@
+import { chromium } from "playwright";
+const [base = "http://127.0.0.1:8011", pid = ""] = process.argv.slice(2);
+const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
+const page = await browser.newPage({ viewport: { width: 1400, height: 850 } });
+page.on("pageerror", (e) => console.log("PAGEERROR:", e.message, e.stack?.split("\n").slice(0, 4).join(" | ")));
+page.on("console", (m) => { if (m.type() !== "debug") console.log(`CONSOLE[${m.type()}]:`, m.text().slice(0, 400)); });
+page.on("requestfailed", (r) => console.log("REQFAIL:", r.url(), r.failure()?.errorText));
+page.on("response", (r) => { if (r.status() >= 400) console.log("HTTP", r.status(), r.url()); });
+await page.goto(`${base}/#/p/${pid}`, { waitUntil: "networkidle" });
+await page.waitForTimeout(12000);
+console.log("canvas:", await page.$$eval("canvas", (c) => c.length), "busy:", await page.$eval(".busy", (b) => getComputedStyle(b).display).catch(() => "n/a"));
+console.log("body classes/text:", (await page.evaluate(() => document.body.innerText.slice(0, 600))));
+await page.screenshot({ path: new URL("./screenshots/debug.png", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1") });
+await browser.close();
