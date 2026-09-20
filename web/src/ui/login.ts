@@ -2,9 +2,10 @@ import { api, ApiError, type AuthStatus } from "../api";
 import { store } from "../state";
 import { button, el, field } from "./dom";
 
-export function renderLogin(root: HTMLElement, status: AuthStatus, onDone: () => void): void {
+export function renderLogin(root: HTMLElement, status: AuthStatus, onDone: () => void, onCancel?: () => void): void {
   root.innerHTML = "";
   let mode: "login" | "register" = status.users === 0 ? "register" : "login";
+  const canRegister = status.users === 0 || status.open_registration;
   const err = el("div", { class: "error" });
   const user = el("input", { type: "text", autocomplete: "username", placeholder: "username" });
   const pass = el("input", { type: "password", autocomplete: "current-password", placeholder: "password (min 8 characters)" });
@@ -19,8 +20,8 @@ export function renderLogin(root: HTMLElement, status: AuthStatus, onDone: () =>
     submit.textContent = mode === "login" ? "Sign in" : "Create account";
     toggle.textContent = mode === "login" ? "Need an account?" : "Already have an account?";
     (org.parentElement as HTMLElement).style.display = mode === "register" ? "" : "none";
-    toggle.style.display = status.open_registration || status.users === 0 ? "" : "none";
-    info.textContent = status.open_registration || status.users === 0 ? "" : "Registration is closed - ask an administrator for an account.";
+    toggle.style.display = canRegister ? "" : "none";
+    info.textContent = canRegister ? "" : "Accounts are created by your administrator - ask for your username and password.";
     err.textContent = "";
   };
 
@@ -41,8 +42,10 @@ export function renderLogin(root: HTMLElement, status: AuthStatus, onDone: () =>
     title,
     field("Username", user), field("Password", pass), field("Organisation", org),
     err,
-    el("div", { class: "btn-row" }, submit, toggle),
+    el("div", { class: "btn-row" }, submit, toggle,
+      status.guest_enabled && onCancel ? button("Continue as guest", onCancel, "btn") : null),
     info,
+    status.guest_enabled ? el("p", { class: "hint" }, `Without an account you can try the software in a sandbox: up to ${status.guest_quota?.max_points?.toLocaleString() ?? "5,000"} points per project, ${status.guest_quota?.max_projects ?? 2} projects, kept for ${status.guest_quota?.ttl_days ?? 7} days. Signing in later keeps your sandbox work.`) : null,
   );
   root.appendChild(el("div", { class: "overlay" }, dlg));
   render();

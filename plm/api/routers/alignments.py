@@ -8,9 +8,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from ...engine.alignment import IP, HorizontalAlignment
 from ...engine.io.dxf_io import read_dxf
-from ..auth import current_user, require_editor
 from ..db import AppDB
-from ..deps import get_db, get_project, get_store, raise_service
+from ..deps import get_db, get_project, get_store, raise_service, require_project
 from ..gpkg import ProjectStore
 from ..schemas import AlignmentIn, AlignmentOut
 from .. import services
@@ -35,7 +34,7 @@ def _check_lock(db: AppDB, project_id: str, alignment_id: int, user: dict) -> No
 
 @router.get("/alignments", response_model=list[AlignmentOut])
 def list_alignments(project_id: str, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                    db: AppDB = Depends(get_db), _: dict = Depends(current_user)):
+                    db: AppDB = Depends(get_db), _: dict = Depends(require_project("viewer"))):
     out = []
     for row in store.alignments():
         try:
@@ -48,7 +47,7 @@ def list_alignments(project_id: str, p: dict = Depends(get_project), store: Proj
 
 @router.post("/alignments", response_model=AlignmentOut, status_code=201)
 def create_alignment(project_id: str, body: AlignmentIn, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                     db: AppDB = Depends(get_db), user: dict = Depends(require_editor)):
+                     db: AppDB = Depends(get_db), user: dict = Depends(require_project("editor"))):
     try:
         out = services.save_alignment(store, body.model_dump())
     except ValueError as e:
@@ -63,7 +62,7 @@ def create_alignment(project_id: str, body: AlignmentIn, p: dict = Depends(get_p
 async def import_alignment(project_id: str, file: UploadFile = File(...), name: str | None = Form(None),
                            start_chainage: float = Form(0.0), layer: str | None = Form(None),
                            p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                           db: AppDB = Depends(get_db), user: dict = Depends(require_editor)):
+                           db: AppDB = Depends(get_db), user: dict = Depends(require_project("editor"))):
     """Import a legacy `*_aln.csv` (count,startCh / N,X,Y,R), a GeoJSON LineString (optional
     per-vertex `radii` property) or a DXF LWPOLYLINE on layer H_ALIGN (default)."""
     data = await file.read()
@@ -118,7 +117,7 @@ async def import_alignment(project_id: str, file: UploadFile = File(...), name: 
 # ".csv" route before "/alignments/{alignment_id}" (greedy path parameter matching)
 @router.get("/alignments/{alignment_id}.csv")
 def alignment_csv(project_id: str, alignment_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                  _: dict = Depends(current_user)):
+                  _: dict = Depends(require_project("viewer"))):
     try:
         row, al = services.get_alignment(store, alignment_id)
     except ServiceError as e:
@@ -129,7 +128,7 @@ def alignment_csv(project_id: str, alignment_id: int, p: dict = Depends(get_proj
 
 @router.get("/alignments/{alignment_id}", response_model=AlignmentOut)
 def get_alignment(project_id: str, alignment_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                  db: AppDB = Depends(get_db), _: dict = Depends(current_user)):
+                  db: AppDB = Depends(get_db), _: dict = Depends(require_project("viewer"))):
     try:
         row, al = services.get_alignment(store, alignment_id)
     except ServiceError as e:
@@ -139,7 +138,7 @@ def get_alignment(project_id: str, alignment_id: int, p: dict = Depends(get_proj
 
 @router.put("/alignments/{alignment_id}", response_model=AlignmentOut)
 def update_alignment(project_id: str, alignment_id: int, body: AlignmentIn, note: str = "", p: dict = Depends(get_project),
-                     store: ProjectStore = Depends(get_store), db: AppDB = Depends(get_db), user: dict = Depends(require_editor)):
+                     store: ProjectStore = Depends(get_store), db: AppDB = Depends(get_db), user: dict = Depends(require_project("editor"))):
     if store.get_alignment(alignment_id) is None:
         raise HTTPException(status_code=404, detail="alignment not found")
     _check_lock(db, project_id, alignment_id, user)
@@ -157,7 +156,7 @@ def update_alignment(project_id: str, alignment_id: int, body: AlignmentIn, note
 
 @router.delete("/alignments/{alignment_id}", status_code=204)
 def delete_alignment(project_id: str, alignment_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                     db: AppDB = Depends(get_db), user: dict = Depends(require_editor)):
+                     db: AppDB = Depends(get_db), user: dict = Depends(require_project("editor"))):
     _check_lock(db, project_id, alignment_id, user)
     if not store.delete_alignment(alignment_id):
         raise HTTPException(status_code=404, detail="alignment not found")
@@ -169,7 +168,7 @@ def delete_alignment(project_id: str, alignment_id: int, p: dict = Depends(get_p
 @router.get("/alignments/{alignment_id}/geometry.geojson")
 def alignment_geojson(project_id: str, alignment_id: int, crs: str | None = None, chainage_interval: float = Query(20.0, gt=0),
                       tick_length: float = Query(5.0, ge=0), p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                      _: dict = Depends(current_user)):
+                      _: dict = Depends(require_project("viewer"))):
     try:
         row, al = services.get_alignment(store, alignment_id)
         return JSONResponse(services.alignment_geojson(al, row["name"], p.get("crs"), crs, chainage_interval, tick_length))
@@ -178,7 +177,7 @@ def alignment_geojson(project_id: str, alignment_id: int, crs: str | None = None
 
 
 @router.post("/alignments/preview", response_model=AlignmentOut)
-def preview_alignment(project_id: str, body: AlignmentIn, p: dict = Depends(get_project), _: dict = Depends(current_user)):
+def preview_alignment(project_id: str, body: AlignmentIn, p: dict = Depends(get_project), _: dict = Depends(require_project("viewer"))):
     """Compute geometry without saving (live editing in the browser)."""
     try:
         al = services.alignment_from_dict(body.model_dump())

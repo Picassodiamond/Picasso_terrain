@@ -6,9 +6,8 @@ import json
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from ..auth import current_user, require_editor
 from ..db import AppDB
-from ..deps import get_db, get_project, get_settings, get_store, raise_service
+from ..deps import get_db, get_project, get_settings, get_store, guest_check, raise_service, require_project
 from ..gpkg import ProjectStore
 from ..schemas import ImportResult
 from .. import services
@@ -27,7 +26,7 @@ async def import_file(
     boundary_layers: str | None = Form(None), void_layers: str | None = Form(None),
     replace: bool = Form(False),
     p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), db: AppDB = Depends(get_db),
-    settings=Depends(get_settings), user: dict = Depends(require_editor),
+    settings=Depends(get_settings), user: dict = Depends(require_project("editor")),
 ):
     data = await file.read()
     if len(data) > settings.max_upload_mb * 1024 * 1024:
@@ -41,6 +40,10 @@ async def import_file(
         return [x.strip() for x in s.split(",") if x.strip()] if s else None
 
     hh = None if has_header in (None, "", "auto") else has_header.lower() in ("1", "true", "yes")
+    if user.get("guest"):
+        # count what this upload would add before writing anything
+        guest_check(settings, db, user, points_total=store.count_points() + services.count_points_in_upload(file.filename or "upload", data, delimiter=delimiter,
+                                                                                                       mapping=json.loads(mapping) if mapping else None, has_header=hh))
     try:
         res = services.import_upload(
             store, file.filename or "upload", data, kind=kind, layer=layer, delimiter=delimiter,
@@ -59,7 +62,7 @@ async def import_file(
 
 @router.get("/points.geojson")
 def points_geojson(project_id: str, crs: str | None = Query(None), layer: str | None = None, limit: int | None = Query(None, ge=1),
-                   p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+                   p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     try:
         return JSONResponse(services.points_geojson(store, p.get("crs"), crs, layers=[layer] if layer else None, limit=limit))
     except ServiceError as e:
@@ -68,7 +71,7 @@ def points_geojson(project_id: str, crs: str | None = Query(None), layer: str | 
 
 @router.get("/points.bin")
 def points_bin(project_id: str, crs: str | None = Query(None), layer: str | None = None, p: dict = Depends(get_project),
-               store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+               store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     """Compact binary positions + fids for the map (16 bytes per point)."""
     from fastapi.responses import Response
 
@@ -81,7 +84,7 @@ def points_bin(project_id: str, crs: str | None = Query(None), layer: str | None
 
 @router.get("/points/nearest")
 def nearest_point(project_id: str, x: float, y: float, radius: float = Query(5.0, gt=0), p: dict = Depends(get_project),
-                  store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+                  store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     """Closest survey point to (x, y) within radius metres (used for clicking in big point clouds)."""
     r = store.nearest_point(x, y, radius)
     if r is None:
@@ -90,7 +93,7 @@ def nearest_point(project_id: str, x: float, y: float, radius: float = Query(5.0
 
 
 @router.get("/points.csv")
-def points_csv(project_id: str, fmt: str = "id,x,y,z,remark", p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def points_csv(project_id: str, fmt: str = "id,x,y,z,remark", p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     from fastapi.responses import PlainTextResponse
 
     return PlainTextResponse(services.export_points_csv(store, fmt=fmt), media_type="text/csv",
@@ -98,14 +101,14 @@ def points_csv(project_id: str, fmt: str = "id,x,y,z,remark", p: dict = Depends(
 
 
 @router.get("/points/layers")
-def point_layers(project_id: str, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def point_layers(project_id: str, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     return store.point_layers()
 
 
 @router.delete("/points")
 def delete_points(project_id: str, fids: str | None = Query(None, description="comma separated fids"), layer: str | None = None,
                   all: bool = Query(False), p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                  db: AppDB = Depends(get_db), _: dict = Depends(require_editor)):
+                  db: AppDB = Depends(get_db), _: dict = Depends(require_project("editor"))):
     if fids:
         n = store.delete_points(fids=[int(x) for x in fids.split(",") if x.strip()])
     elif layer:
@@ -120,7 +123,7 @@ def delete_points(project_id: str, fids: str | None = Query(None, description="c
 
 @router.get("/lines.geojson")
 def lines_geojson(project_id: str, crs: str | None = None, kind: str | None = None, p: dict = Depends(get_project),
-                  store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+                  store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     try:
         return JSONResponse(services.lines_geojson(store, p.get("crs"), crs, kind=kind))
     except ServiceError as e:
@@ -128,13 +131,13 @@ def lines_geojson(project_id: str, crs: str | None = None, kind: str | None = No
 
 
 @router.get("/lines/summary")
-def lines_summary(project_id: str, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def lines_summary(project_id: str, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     return store.line_summary()
 
 
 @router.patch("/lines/{fid}")
 def update_line(project_id: str, fid: int, kind: str | None = None, layer: str | None = None, name: str | None = None,
-                p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_editor)):
+                p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("editor"))):
     if kind is not None:
         kind = {"hole": "void", "breakline": "feature"}.get(kind, kind)
         if kind not in ("feature", "boundary", "void", "contour"):
@@ -145,7 +148,7 @@ def update_line(project_id: str, fid: int, kind: str | None = None, layer: str |
 
 @router.delete("/lines")
 def delete_lines(project_id: str, fids: str | None = Query(None), kind: str | None = None, source: str | None = None, all: bool = Query(False),
-                 p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), db: AppDB = Depends(get_db), _: dict = Depends(require_editor)):
+                 p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), db: AppDB = Depends(get_db), _: dict = Depends(require_project("editor"))):
     if fids:
         n = store.delete_lines(fids=[int(x) for x in fids.split(",") if x.strip()])
     elif kind or source:
@@ -160,7 +163,7 @@ def delete_lines(project_id: str, fids: str | None = Query(None), kind: str | No
 
 @router.post("/lines")
 def add_line(project_id: str, body: dict, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-             db: AppDB = Depends(get_db), _: dict = Depends(require_editor)):
+             db: AppDB = Depends(get_db), _: dict = Depends(require_project("editor"))):
     """Add a feature/boundary/void line drawn in the browser: {kind, layer, name, coords: [[x,y,z],...]}."""
     import numpy as np
 
@@ -178,7 +181,7 @@ def add_line(project_id: str, body: dict, p: dict = Depends(get_project), store:
 
 # declared last: '/points/{fid}' would otherwise swallow '/points/layers' and '/points/nearest'
 @router.get("/points/{fid}")
-def point_detail(project_id: str, fid: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def point_detail(project_id: str, fid: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     r = store.point(fid)
     if r is None:
         raise HTTPException(status_code=404, detail="point not found")

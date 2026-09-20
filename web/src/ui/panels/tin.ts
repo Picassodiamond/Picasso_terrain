@@ -1,4 +1,4 @@
-import { api, ApiError, waitForJob } from "../../api";
+import { api, ApiError, jobStatusText, waitForJob } from "../../api";
 import { renderProfile } from "../../charts/profile";
 import { store, toast } from "../../state";
 import { button, el, field, fmt, numberInput, select } from "../dom";
@@ -123,7 +123,8 @@ export function renderTinPanel(ws: Workspace, host: HTMLElement): void {
         max_edge_factor: maxEdgeFactor.value ? Number(maxEdgeFactor.value) : null,
         min_angle_deg: Number(minAngle.value) || 0,
       });
-      job = await waitForJob(job, (j) => store.set("busy", `Triangulating ${Math.round(j.progress * 100)}%`));
+      if (job.status === "pending") store.set("busy", jobStatusText(job, "Triangulating"));
+      job = await waitForJob(job, (j) => store.set("busy", jobStatusText(j, "Triangulating")));
       const r = job.result!;
       const rej = r.stats?.raw_triangles ? r.stats.raw_triangles - r.n_triangles : 0;
       toast(`TIN built: ${r.n_triangles} triangles${rej ? `, ${rej} rejected` : ""}${r.issues_count ? `, ${r.issues_count} issues` : ""}`, "ok");

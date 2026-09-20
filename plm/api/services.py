@@ -159,6 +159,22 @@ def import_upload(store: ProjectStore, filename: str, data: bytes, *, kind: str 
             "lines_added": lines_added, "warnings": warnings, "summary": store.summary()}
 
 
+def count_points_in_upload(filename: str, data: bytes, *, delimiter=None, mapping=None, has_header=None) -> int:
+    """How many points an upload would add (used for guest quotas before writing anything)."""
+    ext = Path(filename).suffix.lower()
+    try:
+        if ext in (".geojson", ".json"):
+            gj = read_geojson(data.decode("utf-8", errors="replace"))
+            return len(gj.points)
+        if ext == ".dxf":
+            return max(0, data.count(b"\nPOINT\n") + data.count(b"\nINSERT\n"))
+        if ext == ".xlsx":
+            return len(_read_xlsx_points(data, mapping))
+        return len(read_points_csv(data.decode("utf-8", errors="replace"), delimiter=delimiter, mapping=mapping, has_header=has_header))
+    except Exception:  # noqa: BLE001 - the real import reports parse errors properly
+        return 0
+
+
 def _read_xlsx_points(data: bytes, mapping: dict | None) -> PointSet:
     try:
         import openpyxl

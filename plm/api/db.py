@@ -7,7 +7,7 @@ import json
 import secrets
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +62,12 @@ CREATE TABLE IF NOT EXISTS alignment_versions (
     user_id TEXT, username TEXT, note TEXT DEFAULT '', data TEXT NOT NULL, created TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_aln_versions ON alignment_versions(project_id, alignment_id, version);
+CREATE TABLE IF NOT EXISTS catalogue (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL, ref_id INTEGER NOT NULL, name TEXT DEFAULT '',
+    module TEXT DEFAULT '', crs TEXT, footprint TEXT, bounds TEXT, lon REAL, lat REAL, points INTEGER, triangles INTEGER,
+    z_min REAL, z_max REAL, spacing REAL, tags TEXT DEFAULT '[]', created TEXT NOT NULL, updated TEXT NOT NULL,
+    UNIQUE(project_id, kind, ref_id)
+);
 """
 
 
@@ -71,6 +77,23 @@ class AppDB:
         self._lock = threading.RLock()
         with self._connect() as c:
             c.executescript(_SCHEMA)
+            self._migrate(c)
+
+    @staticmethod
+    def _migrate(c: sqlite3.Connection) -> None:
+        """Columns added after the first release."""
+        cols = {r[1] for r in c.execute("PRAGMA table_info(projects)")}
+        if "status" not in cols:
+            c.execute("ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+        ucols = {r[1] for r in c.execute("PRAGMA table_info(users)")}
+        for col, ddl in (("full_name", "TEXT DEFAULT ''"), ("email", "TEXT DEFAULT ''"), ("notes", "TEXT DEFAULT ''"), ("created_by", "TEXT")):
+            if col not in ucols:
+                c.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
+        jcols = {r[1] for r in c.execute("PRAGMA table_info(jobs)")}
+        if "user_id" not in jcols:
+            c.execute("ALTER TABLE jobs ADD COLUMN user_id TEXT")
+        if "priority" not in jcols:
+            c.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
 
     def _connect(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
@@ -95,14 +118,33 @@ class AppDB:
         dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 200_000)
         return hmac.compare_digest(dk.hex(), digest)
 
-    def create_user(self, username: str, password: str, role: str = "editor", organisation: str = "") -> dict:
+    def create_user(self, username: str, password: str, role: str = "editor", organisation: str = "", full_name: str = "",
+                    email: str = "", notes: str = "", created_by: str | None = None) -> dict:
         uid = new_id()
         with self._lock, self._connect() as c:
             c.execute(
-                "INSERT INTO users(id, username, password_hash, role, organisation, created) VALUES (?,?,?,?,?,?)",
-                (uid, username, self.hash_password(password), role, organisation, now_iso()),
+                "INSERT INTO users(id, username, password_hash, role, organisation, created, full_name, email, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (uid, username, self.hash_password(password), role, organisation, now_iso(), full_name, email, notes, created_by),
             )
         return self.get_user(uid)  # type: ignore[return-value]
+
+    def update_user(self, uid: str, **fields) -> dict | None:
+        sets, vals = [], []
+        for k in ("role", "organisation", "full_name", "email", "notes"):
+            if fields.get(k) is not None:
+                sets.append(f"{k}=?")
+                vals.append(fields[k])
+        if fields.get("disabled") is not None:
+            sets.append("disabled=?")
+            vals.append(int(bool(fields["disabled"])))
+        if fields.get("password"):
+            sets.append("password_hash=?")
+            vals.append(self.hash_password(fields["password"]))
+        if sets:
+            vals.append(uid)
+            with self._lock, self._connect() as c:
+                c.execute(f"UPDATE users SET {', '.join(sets)} WHERE id=?", vals)
+        return self.get_user(uid)
 
     def get_user(self, uid: str) -> dict | None:
         with self._connect() as c:
@@ -116,7 +158,7 @@ class AppDB:
 
     def list_users(self) -> list[dict]:
         with self._connect() as c:
-            return [dict(r) for r in c.execute("SELECT id, username, role, organisation, created, disabled FROM users ORDER BY username")]
+            return [dict(r) for r in c.execute("SELECT id, username, role, organisation, created, disabled, full_name, email, notes, created_by FROM users ORDER BY username")]
 
     def set_password(self, username: str, password: str) -> bool:
         with self._lock, self._connect() as c:
@@ -142,24 +184,15 @@ class AppDB:
     def get_project(self, pid: str) -> dict | None:
         with self._connect() as c:
             r = c.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
-        if not r:
-            return None
-        d = dict(r)
-        d["settings"] = json.loads(d.get("settings") or "{}")
-        return d
+        return self._project_row(r) if r else None
 
     def list_projects(self) -> list[dict]:
         with self._connect() as c:
             rows = c.execute("SELECT * FROM projects ORDER BY updated DESC").fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            d["settings"] = json.loads(d.get("settings") or "{}")
-            out.append(d)
-        return out
+        return [self._project_row(r) for r in rows]
 
     def update_project(self, pid: str, **fields: Any) -> dict | None:
-        allowed = {"name", "description", "crs", "settings"}
+        allowed = {"name", "description", "crs", "settings", "owner_id", "status"}
         sets, vals = [], []
         for k, v in fields.items():
             if k in allowed and v is not None:
@@ -180,18 +213,83 @@ class AppDB:
     def delete_project(self, pid: str) -> bool:
         with self._lock, self._connect() as c:
             c.execute("DELETE FROM jobs WHERE project_id=?", (pid,))
+            c.execute("DELETE FROM catalogue WHERE project_id=?", (pid,))
+            c.execute("DELETE FROM project_members WHERE project_id=?", (pid,))
             cur = c.execute("DELETE FROM projects WHERE id=?", (pid,))
             return cur.rowcount > 0
 
+    # ------------------------------------------------------------------ guests
+    def projects_owned_by(self, owner_id: str) -> list[dict]:
+        with self._connect() as c:
+            rows = c.execute("SELECT * FROM projects WHERE owner_id=? ORDER BY created", (owner_id,)).fetchall()
+        return [self._project_row(r) for r in rows]
+
+    def claim_guest_projects(self, guest_id: str, user_id: str) -> int:
+        """Hand a guest's sandbox projects to the account that was just created / signed in."""
+        with self._lock, self._connect() as c:
+            rows = c.execute("SELECT id FROM projects WHERE owner_id=?", (guest_id,)).fetchall()
+            for r in rows:
+                c.execute("INSERT INTO project_members(project_id, user_id, role, added) VALUES (?,?,?,?) "
+                          "ON CONFLICT(project_id, user_id) DO UPDATE SET role='owner'", (r[0], user_id, "owner", now_iso()))
+            c.execute("UPDATE projects SET owner_id=?, updated=? WHERE owner_id=?", (user_id, now_iso(), guest_id))
+            c.execute("UPDATE jobs SET user_id=? WHERE user_id=?", (user_id, guest_id))
+        return len(rows)
+
+    def expired_guest_projects(self, ttl_days: int) -> list[dict]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).isoformat()
+        with self._connect() as c:
+            rows = c.execute("SELECT * FROM projects WHERE owner_id LIKE 'guest:%' AND updated < ?", (cutoff,)).fetchall()
+        return [self._project_row(r) for r in rows]
+
+    @staticmethod
+    def _project_row(r) -> dict:
+        d = dict(r)
+        d["settings"] = json.loads(d.get("settings") or "{}")
+        return d
+
     # ------------------------------------------------------------------ jobs
-    def create_job(self, project_id: str, kind: str, params: dict) -> dict:
+    def create_job(self, project_id: str, kind: str, params: dict, user_id: str | None = None, priority: int = 0) -> dict:
         jid = new_id()
         with self._lock, self._connect() as c:
             c.execute(
-                "INSERT INTO jobs(id, project_id, kind, status, params, created) VALUES (?,?,?,?,?,?)",
-                (jid, project_id, kind, "pending", json.dumps(params), now_iso()),
+                "INSERT INTO jobs(id, project_id, kind, status, params, created, user_id, priority) VALUES (?,?,?,?,?,?,?,?)",
+                (jid, project_id, kind, "pending", json.dumps(params), now_iso(), user_id, int(priority)),
             )
         return self.get_job(jid)  # type: ignore[return-value]
+
+    def queue_info(self, job: dict) -> dict:
+        """Position of a pending job in the fair queue, queue length and a rough ETA from recent runs."""
+        with self._connect() as c:
+            pending = int(c.execute("SELECT COUNT(*) FROM jobs WHERE status='pending'").fetchone()[0])
+            running = int(c.execute("SELECT COUNT(*) FROM jobs WHERE status='running'").fetchone()[0])
+            pos = None
+            if job.get("status") == "pending":
+                # timestamps have one-second resolution: break ties by insertion order (rowid)
+                pos = 1 + int(c.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE status='pending' AND (priority < ? OR (priority = ? AND (created < ? OR "
+                    "(created = ? AND rowid < (SELECT rowid FROM jobs WHERE id=?)))))",
+                    (job.get("priority", 0), job.get("priority", 0), job["created"], job["created"], job["id"])).fetchone()[0])
+            rows = c.execute("SELECT started, finished FROM jobs WHERE kind=? AND status='done' AND started IS NOT NULL AND finished IS NOT NULL "
+                             "ORDER BY finished DESC LIMIT 20", (job["kind"],)).fetchall()
+        durs = []
+        for st, fi in rows:
+            try:
+                durs.append((datetime.fromisoformat(fi) - datetime.fromisoformat(st)).total_seconds())
+            except ValueError:
+                continue
+        avg = (sum(durs) / len(durs)) if durs else None
+        eta = None
+        if avg is not None and pos is not None:
+            eta = round(avg * pos + (avg * 0.5 if running else 0.0))
+        elif avg is not None and job.get("status") == "running":
+            eta = round(avg)
+        return {"queue_position": pos, "queue_length": pending, "running": running, "eta_seconds": eta}
+
+    def queue_counts(self) -> dict:
+        with self._connect() as c:
+            pending = int(c.execute("SELECT COUNT(*) FROM jobs WHERE status='pending'").fetchone()[0])
+            running = int(c.execute("SELECT COUNT(*) FROM jobs WHERE status='running'").fetchone()[0])
+        return {"pending": pending, "running": running}
 
     def get_job(self, jid: str) -> dict | None:
         with self._connect() as c:
@@ -228,9 +326,65 @@ class AppDB:
             return cur.rowcount > 0
 
     def next_pending_job(self) -> dict | None:
+        """Fair FIFO: lower priority number first, then oldest; a user with a job already running
+        waits until it finishes (one running job per user)."""
         with self._connect() as c:
-            r = c.execute("SELECT * FROM jobs WHERE status='pending' ORDER BY created LIMIT 1").fetchone()
+            r = c.execute(
+                "SELECT * FROM jobs j WHERE status='pending' AND (user_id IS NULL OR user_id NOT IN "
+                "(SELECT user_id FROM jobs WHERE status='running' AND user_id IS NOT NULL)) "
+                "ORDER BY priority, created, rowid LIMIT 1").fetchone()
         return self._job_row(r) if r else None
+
+    # ------------------------------------------------------------------ catalogue
+    def catalogue_upsert(self, item: dict) -> dict:
+        ts = now_iso()
+        with self._lock, self._connect() as c:
+            c.execute(
+                "INSERT INTO catalogue(id, project_id, kind, ref_id, name, module, crs, footprint, bounds, lon, lat, points, triangles, z_min, z_max, spacing, tags, created, updated) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(project_id, kind, ref_id) DO UPDATE SET "
+                "name=excluded.name, module=excluded.module, crs=excluded.crs, footprint=excluded.footprint, bounds=excluded.bounds, lon=excluded.lon, lat=excluded.lat, "
+                "points=excluded.points, triangles=excluded.triangles, z_min=excluded.z_min, z_max=excluded.z_max, spacing=excluded.spacing, tags=excluded.tags, updated=excluded.updated",
+                (new_id(), item["project_id"], item["kind"], int(item["ref_id"]), item.get("name", ""), item.get("module", ""), item.get("crs"),
+                 json.dumps(item["footprint"]) if item.get("footprint") is not None else None, json.dumps(item.get("bounds")) if item.get("bounds") is not None else None,
+                 item.get("lon"), item.get("lat"), item.get("points"), item.get("triangles"), item.get("z_min"), item.get("z_max"), item.get("spacing"),
+                 json.dumps(item.get("tags") or []), ts, ts),
+            )
+            r = c.execute("SELECT * FROM catalogue WHERE project_id=? AND kind=? AND ref_id=?", (item["project_id"], item["kind"], int(item["ref_id"]))).fetchone()
+        return self._cat_row(r)
+
+    @staticmethod
+    def _cat_row(r) -> dict:
+        d = dict(r)
+        d["footprint"] = json.loads(d["footprint"]) if d.get("footprint") else None
+        d["bounds"] = json.loads(d["bounds"]) if d.get("bounds") else None
+        d["tags"] = json.loads(d.get("tags") or "[]")
+        return d
+
+    def catalogue_items(self, kind: str | None = None, project_id: str | None = None) -> list[dict]:
+        q = "SELECT * FROM catalogue"
+        cond, vals = [], []
+        if kind:
+            cond.append("kind=?")
+            vals.append(kind)
+        if project_id:
+            cond.append("project_id=?")
+            vals.append(project_id)
+        if cond:
+            q += " WHERE " + " AND ".join(cond)
+        q += " ORDER BY updated DESC"
+        with self._connect() as c:
+            return [self._cat_row(r) for r in c.execute(q, vals)]
+
+    def catalogue_get(self, item_id: str) -> dict | None:
+        with self._connect() as c:
+            r = c.execute("SELECT * FROM catalogue WHERE id=?", (item_id,)).fetchone()
+        return self._cat_row(r) if r else None
+
+    def catalogue_delete(self, project_id: str, kind: str | None = None, ref_id: int | None = None) -> int:
+        with self._lock, self._connect() as c:
+            if kind is not None and ref_id is not None:
+                return c.execute("DELETE FROM catalogue WHERE project_id=? AND kind=? AND ref_id=?", (project_id, kind, int(ref_id))).rowcount
+            return c.execute("DELETE FROM catalogue WHERE project_id=?", (project_id,)).rowcount
 
     # ------------------------------------------------------------------ membership
     def add_member(self, project_id: str, user_id: str, role: str = "editor") -> None:

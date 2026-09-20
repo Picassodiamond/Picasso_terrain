@@ -260,15 +260,17 @@ def test_drawn_lines_and_voids(client):
 def test_auth_and_collaboration(tmp_path):
     app = create_app(_settings(tmp_path, auth=True, open=True))
     with TestClient(app) as anon:
-        assert anon.get("/api/projects").status_code == 401
+        # with auth on, an anonymous visitor is a guest in a sandbox (see test_access for quotas)
+        assert anon.get("/api/projects").status_code == 200 and anon.get("/api/auth/me").json()["guest"] is True
         st = anon.get("/api/auth/status").json()
-        assert st["auth_enabled"] and st["open_registration"]
+        assert st["auth_enabled"] and st["open_registration"] and st["guest_enabled"]
     # two users
     alice = TestClient(app)
     bob = TestClient(app)
     r = alice.post("/api/auth/register", json={"username": "alice", "password": "secret123", "organisation": "SSTN"})
     assert r.status_code == 201 and r.json()["role"] == "admin"  # first user is admin
-    r = bob.post("/api/auth/register", json={"username": "bob", "password": "secret456"})
+    # org visibility now means the owner's organisation: bob joins SSTN too
+    r = bob.post("/api/auth/register", json={"username": "bob", "password": "secret456", "organisation": "SSTN"})
     assert r.status_code == 201 and r.json()["role"] == "editor"
     assert alice.get("/api/auth/me").json()["username"] == "alice"
     assert bob.post("/api/auth/login", json={"username": "bob", "password": "wrong"}).status_code == 401
@@ -318,7 +320,7 @@ def test_auth_and_collaboration(tmp_path):
     assert not any(p["id"] == pid2 for p in bob.get("/api/projects").json())
     # logout
     alice.post("/api/auth/logout")
-    assert alice.get("/api/auth/me").status_code == 401
+    assert alice.get("/api/auth/me").json()["guest"] is True  # back to a guest sandbox identity
     # registration closed after toggling
     app.state.settings.open_registration = False
     assert TestClient(app).post("/api/auth/register", json={"username": "carol", "password": "secret789"}).status_code == 403

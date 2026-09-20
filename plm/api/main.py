@@ -10,7 +10,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import Settings
 from .db import AppDB
-from .routers import alignments, auth_routes, collab, constraints, contours, data, designs, export, jobs, projects, sections, tin
+from .deps import Slots, available_memory_mb
+from .routers import alignments, auth_routes, catalogue, collab, constraints, contours, data, designs, export, jobs, projects, sections, tin
 from .services import ServiceError
 
 
@@ -21,6 +22,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                   docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json")
     app.state.settings = settings
     app.state.db = AppDB(settings.app_db_path)
+    app.state.heavy = Slots(settings.max_concurrent_heavy)
 
     if settings.cors_origins:
         app.add_middleware(
@@ -34,12 +36,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     api_prefix = "/api"
     for r in (auth_routes.router, projects.router, data.router, constraints.router, tin.router, contours.router,
-              alignments.router, sections.router, export.router, jobs.router, collab.router, designs.router):
+              alignments.router, sections.router, export.router, jobs.router, collab.router, designs.router, catalogue.router):
         app.include_router(r, prefix=api_prefix)
 
     @app.get("/api/health", tags=["meta"])
     def health():
-        return {"status": "ok", "version": settings.version, "auth_enabled": settings.auth_enabled}
+        """Liveness plus load: job queue depth, heavy-request slots, free memory, and a `busy` flag
+        the UI turns into a banner so users know to expect a wait."""
+        q = app.state.db.queue_counts()
+        slots: Slots = app.state.heavy
+        avail = available_memory_mb()
+        busy = q["pending"] >= settings.busy_queue_threshold or slots.in_use >= slots.capacity
+        return {"status": "ok", "version": settings.version, "auth_enabled": settings.auth_enabled,
+                "guest_enabled": settings.auth_enabled and settings.guest_enabled, "job_mode": settings.job_mode,
+                "queue": q, "load": {"heavy_in_use": slots.in_use, "heavy_capacity": slots.capacity,
+                                     "available_mb": None if avail is None else round(avail)},
+                "busy": busy}
 
     # static frontend (Vite build) - API routes take precedence because they are registered first
     dist = settings.web_dist

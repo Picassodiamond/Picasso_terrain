@@ -4,9 +4,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ..auth import current_user, require_editor
 from ..db import AppDB
-from ..deps import get_db, get_project, get_store
+from ..deps import get_db, get_project, get_store, require_project
 from ..gpkg import ProjectStore
 from ..schemas import AlignmentOut
 from .. import services
@@ -42,22 +41,26 @@ class VersionRestore(BaseModel):
 
 # ---------------------------------------------------------------- members
 @router.get("/members")
-def list_members(project_id: str, db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(current_user)):
+def list_members(project_id: str, db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(require_project("viewer"))):
     return db.members(project_id)
 
 
 @router.post("/members", status_code=201)
-def add_member(project_id: str, body: MemberIn, db: AppDB = Depends(get_db), p: dict = Depends(get_project), user: dict = Depends(require_editor)):
+def add_member(project_id: str, body: MemberIn, db: AppDB = Depends(get_db), p: dict = Depends(get_project), user: dict = Depends(require_project("owner"))):
     u = db.get_user_by_name(body.username)
     if not u:
         raise HTTPException(status_code=404, detail="user not found")
+    if body.role == "owner":
+        raise HTTPException(status_code=400, detail="use /transfer to hand over ownership")
+    if u["id"] == p.get("owner_id"):
+        raise HTTPException(status_code=400, detail="that user is the owner")
     db.add_member(project_id, u["id"], body.role)
     db.log(project_id, user, "member_added", "user", u["id"], {"username": u["username"], "role": body.role})
     return db.members(project_id)
 
 
 @router.delete("/members/{user_id}")
-def remove_member(project_id: str, user_id: str, db: AppDB = Depends(get_db), p: dict = Depends(get_project), user: dict = Depends(require_editor)):
+def remove_member(project_id: str, user_id: str, db: AppDB = Depends(get_db), p: dict = Depends(get_project), user: dict = Depends(require_project("owner"))):
     if p.get("owner_id") == user_id:
         raise HTTPException(status_code=400, detail="the owner cannot be removed")
     db.remove_member(project_id, user_id)
@@ -65,22 +68,59 @@ def remove_member(project_id: str, user_id: str, db: AppDB = Depends(get_db), p:
     return db.members(project_id)
 
 
+class RolePatch(BaseModel):
+    role: str = Field(pattern="^(viewer|editor)$")
+
+
+@router.patch("/members/{user_id}")
+def change_role(project_id: str, user_id: str, body: RolePatch, db: AppDB = Depends(get_db), p: dict = Depends(get_project),
+                user: dict = Depends(require_project("owner"))):
+    if p.get("owner_id") == user_id:
+        raise HTTPException(status_code=400, detail="the owner's role cannot be changed; transfer ownership instead")
+    if db.member_role(project_id, user_id) is None:
+        raise HTTPException(status_code=404, detail="not a member")
+    db.add_member(project_id, user_id, body.role)
+    db.log(project_id, user, "member_role_changed", "user", user_id, {"role": body.role})
+    return db.members(project_id)
+
+
+class TransferIn(BaseModel):
+    username: str
+
+
+@router.post("/transfer")
+def transfer_ownership(project_id: str, body: TransferIn, db: AppDB = Depends(get_db), p: dict = Depends(get_project),
+                       user: dict = Depends(require_project("owner"))):
+    """Hand the project to another account. The previous owner stays as an editor."""
+    u = db.get_user_by_name(body.username)
+    if not u:
+        raise HTTPException(status_code=404, detail="user not found")
+    if u["id"] == p.get("owner_id"):
+        raise HTTPException(status_code=400, detail="that user is already the owner")
+    if p.get("owner_id"):
+        db.add_member(project_id, p["owner_id"], "editor")
+    db.add_member(project_id, u["id"], "owner")
+    db.update_project(project_id, owner_id=u["id"])
+    db.log(project_id, user, "ownership_transferred", "user", u["id"], {"username": u["username"]})
+    return db.members(project_id)
+
+
 # ---------------------------------------------------------------- comments
 @router.get("/comments")
 def list_comments(project_id: str, target_type: str | None = None, target_id: str | None = None, include_resolved: bool = True,
-                  db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(current_user)):
+                  db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(require_project("viewer"))):
     return db.comments(project_id, target_type, target_id, include_resolved)
 
 
 @router.post("/comments", status_code=201)
-def add_comment(project_id: str, body: CommentIn, db: AppDB = Depends(get_db), p: dict = Depends(get_project), user: dict = Depends(current_user)):
+def add_comment(project_id: str, body: CommentIn, db: AppDB = Depends(get_db), p: dict = Depends(get_project), user: dict = Depends(require_project("viewer"))):
     c = db.add_comment(project_id, user, body.text, body.target_type, body.target_id, body.parent_id, body.x, body.y, body.chainage)
     db.log(project_id, user, "comment", body.target_type, body.target_id, {"comment_id": c["id"], "text": body.text[:120]})
     return c
 
 
 @router.patch("/comments/{comment_id}")
-def patch_comment(project_id: str, comment_id: str, body: CommentPatch, db: AppDB = Depends(get_db), p: dict = Depends(get_project), user: dict = Depends(current_user)):
+def patch_comment(project_id: str, comment_id: str, body: CommentPatch, db: AppDB = Depends(get_db), p: dict = Depends(get_project), user: dict = Depends(require_project("viewer"))):
     c = db.get_comment(comment_id)
     if not c or c["project_id"] != project_id:
         raise HTTPException(status_code=404, detail="comment not found")
@@ -93,7 +133,7 @@ def patch_comment(project_id: str, comment_id: str, body: CommentPatch, db: AppD
 
 
 @router.delete("/comments/{comment_id}", status_code=204)
-def delete_comment(project_id: str, comment_id: str, db: AppDB = Depends(get_db), p: dict = Depends(get_project), user: dict = Depends(current_user)):
+def delete_comment(project_id: str, comment_id: str, db: AppDB = Depends(get_db), p: dict = Depends(get_project), user: dict = Depends(require_project("viewer"))):
     c = db.get_comment(comment_id)
     if not c or c["project_id"] != project_id:
         raise HTTPException(status_code=404, detail="comment not found")
@@ -106,20 +146,20 @@ def delete_comment(project_id: str, comment_id: str, db: AppDB = Depends(get_db)
 # ---------------------------------------------------------------- activity (polled by the browser)
 @router.get("/activity")
 def activity(project_id: str, since: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500),
-             db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(current_user)):
+             db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(require_project("viewer"))):
     return {"activity": db.activity(project_id, since, limit), "locks": db.locks(project_id)}
 
 
 # ---------------------------------------------------------------- locks (turn-by-turn editing)
 @router.get("/locks")
-def list_locks(project_id: str, db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(current_user)):
+def list_locks(project_id: str, db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(require_project("viewer"))):
     return db.locks(project_id)
 
 
 @router.post("/alignments/{alignment_id}/lock")
 def acquire_alignment_lock(project_id: str, alignment_id: int, minutes: int = Query(LOCK_MINUTES, ge=1, le=240),
                            db: AppDB = Depends(get_db), p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                           user: dict = Depends(require_editor)):
+                           user: dict = Depends(require_project("editor"))):
     if store.get_alignment(alignment_id) is None:
         raise HTTPException(status_code=404, detail="alignment not found")
     ok, lock = db.acquire_lock(project_id, "alignment", alignment_id, user, minutes)
@@ -131,7 +171,7 @@ def acquire_alignment_lock(project_id: str, alignment_id: int, minutes: int = Qu
 
 @router.delete("/alignments/{alignment_id}/lock")
 def release_alignment_lock(project_id: str, alignment_id: int, force: bool = False, db: AppDB = Depends(get_db), p: dict = Depends(get_project),
-                           user: dict = Depends(require_editor)):
+                           user: dict = Depends(require_project("editor"))):
     if force and user["role"] != "admin" and p.get("owner_id") != user["id"]:
         raise HTTPException(status_code=403, detail="only the project owner or an admin can force-release")
     released = db.release_lock(project_id, "alignment", alignment_id, user, force=force)
@@ -142,12 +182,12 @@ def release_alignment_lock(project_id: str, alignment_id: int, force: bool = Fal
 
 # ---------------------------------------------------------------- alignment history
 @router.get("/alignments/{alignment_id}/versions")
-def alignment_versions(project_id: str, alignment_id: int, db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(current_user)):
+def alignment_versions(project_id: str, alignment_id: int, db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(require_project("viewer"))):
     return db.alignment_versions(project_id, alignment_id)
 
 
 @router.get("/alignments/{alignment_id}/versions/{version}")
-def alignment_version(project_id: str, alignment_id: int, version: int, db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(current_user)):
+def alignment_version(project_id: str, alignment_id: int, version: int, db: AppDB = Depends(get_db), p: dict = Depends(get_project), _: dict = Depends(require_project("viewer"))):
     v = db.get_alignment_version(project_id, alignment_id, version)
     if not v:
         raise HTTPException(status_code=404, detail="version not found")
@@ -156,7 +196,7 @@ def alignment_version(project_id: str, alignment_id: int, version: int, db: AppD
 
 @router.post("/alignments/{alignment_id}/versions/{version}/restore", response_model=AlignmentOut)
 def restore_alignment_version(project_id: str, alignment_id: int, version: int, body: VersionRestore, db: AppDB = Depends(get_db),
-                              p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), user: dict = Depends(require_editor)):
+                              p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), user: dict = Depends(require_project("editor"))):
     v = db.get_alignment_version(project_id, alignment_id, version)
     if not v:
         raise HTTPException(status_code=404, detail="version not found")

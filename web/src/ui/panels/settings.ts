@@ -7,7 +7,8 @@ export function renderSettingsPanel(ws: Workspace, host: HTMLElement): void {
   const p = ws.project;
   const name = el("input", { type: "text", value: p.name });
   const desc = el("input", { type: "text", value: p.description || "" });
-  const vis = select([{ value: "org", label: "everyone in the organisation" }, { value: "private", label: "members only" }], String((p.settings as any)?.visibility || "org"));
+  const isOwner = p.my_role === "owner" || !store.get("authEnabled");
+  const tags = el("input", { type: "text", placeholder: "district, road name, year (comma separated)", value: ((p.settings as any)?.tags || []).join(", ") });
   const crsSel = select([], p.crs);
   const custom = el("input", { type: "text", placeholder: "EPSG:32645 or +proj=…", value: "" });
   const crsInfo = el("div", { class: "muted" });
@@ -21,19 +22,34 @@ export function renderSettingsPanel(ws: Workspace, host: HTMLElement): void {
   crsInfo.textContent = p.crs_info?.is_local ? "Local grid: coordinates are plain metres, exactly like the legacy program. Map overlay disabled." : `${p.crs_info?.name}${p.crs_info?.epsg ? " (EPSG:" + p.crs_info.epsg + ")" : ""}`;
 
   host.append(el("h3", {}, "Project settings"), el("div", { class: "card" },
-    field("Name", name), field("Description", desc), field("Visibility", vis),
+    field("Name", name), field("Description", desc), field("Tags", tags, "used by the Library to find this project's terrain models and designs"),
     field("Coordinate reference system", crsSel, "Changing the CRS re-labels the coordinates; it does not transform them. Reload after changing."),
     field("Custom CRS", custom),
     crsInfo,
     el("div", { class: "btn-row" }, button("Save", async () => {
       const spec = crsSel.value === "__custom" ? custom.value.trim() : crsSel.value;
       try {
-        await api.projects.update(p.id, { name: name.value, description: desc.value, crs: spec, settings: { visibility: vis.value } });
+        await api.projects.update(p.id, { name: name.value, description: desc.value, crs: spec,
+          settings: { tags: tags.value.split(",").map((t) => t.trim()).filter(Boolean) } });
         toast("Saved. Reloading…", "ok");
         setTimeout(() => location.reload(), 600);
       } catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); }
     }, "btn primary")),
   ));
+
+  // archive / restore (owner)
+  if (isOwner && store.get("authEnabled") && !store.get("user")?.guest) {
+    const archived = p.status === "archived";
+    host.append(el("h3", {}, "Archive"), el("div", { class: "card" },
+      el("p", { class: "hint" }, archived
+        ? "This project is archived: everyone with access can read it, nobody can change it. Restore it to continue working."
+        : "Archiving writes a portable bundle (GeoPackage + metadata) to the server's archive store and makes the project read-only. Its terrain models and designs stay in the Library."),
+      el("div", { class: "btn-row" },
+        archived
+          ? button("Restore project", async () => { try { await api.projects.restore(p.id); toast("Project restored. Reloading…", "ok"); setTimeout(() => location.reload(), 500); } catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); } }, "btn primary")
+          : button("Archive project", async () => { if (!confirm(`Archive "${p.name}"? It becomes read-only until restored.`)) return; try { await api.projects.archive(p.id); toast("Project archived. Reloading…", "ok"); setTimeout(() => location.reload(), 500); } catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); } }, "btn"),
+        button("Download archive (.zip)", () => { window.open(api.projects.archiveUrl(p.id), "_blank"); }, "btn"))));
+  }
 
   // place a local grid on the map (approximate georeferencing by one known point)
   if (p.crs_info?.is_local) {

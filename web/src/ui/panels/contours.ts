@@ -1,4 +1,4 @@
-import { api, ApiError, waitForJob, type ContourSet, type ContourStyle } from "../../api";
+import { api, ApiError, jobStatusText, waitForJob, type ContourSet, type ContourStyle } from "../../api";
 import { store, toast } from "../../state";
 import { button, el, field, numberInput, select } from "../dom";
 import type { Workspace } from "../workspace";
@@ -54,7 +54,8 @@ export function renderContoursPanel(ws: Workspace, host: HTMLElement): void {
     try {
       let job = await api.contours.create(pid, { run_id: store.get("currentRun"), name: name.value, interval: Number(interval.value), major_every: Number(major.value), base: Number(base.value),
         smoothing: smoothing.value, min_spacing: Number(minSpacing.value), min_length: Number(minLength.value), style: sf.read() });
-      job = await waitForJob(job, (j) => store.set("busy", `Contouring ${Math.round(j.progress * 100)}%`));
+      if (job.status === "pending") store.set("busy", jobStatusText(job, "Contouring"));
+      job = await waitForJob(job, (j) => store.set("busy", jobStatusText(j, "Contouring")));
       toast(`Contours generated: ${job.result?.n_lines} lines`, "ok");
       const sets = await api.contours.list(pid);
       store.set("visibleContourSets", [job.result!.id]);

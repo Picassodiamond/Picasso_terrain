@@ -8,22 +8,51 @@ export function renderTeamPanel(ws: Workspace, host: HTMLElement): void {
   const user = store.get("user");
   const authed = !!user?.authenticated;
 
-  // members
+  // members and sharing (owner only)
+  const isOwner = ws.project.my_role === "owner" || !authed;
   const membersEl = el("div");
-  const uname = el("input", { type: "text", placeholder: "username" });
+  const uname = el("input", { type: "text", placeholder: "username (an account created by the admin)" });
   const role = select([{ value: "editor", label: "editor" }, { value: "viewer", label: "viewer" }], "editor");
+  const err = (e: unknown) => toast(e instanceof ApiError ? e.detail : String(e), "error");
   async function renderMembers() {
     membersEl.innerHTML = "";
-    if (!authed) { membersEl.appendChild(el("p", { class: "muted" }, "Authentication is disabled on this server - everyone can edit.")); return; }
+    if (!store.get("authEnabled")) { membersEl.appendChild(el("p", { class: "muted" }, "Authentication is disabled on this server - everyone can edit.")); return; }
+    if (user?.guest) { membersEl.appendChild(el("p", { class: "muted" }, "Sign in to share projects with other people.")); return; }
     const ms = await api.collab.members(pid);
     const tbl = el("table", { class: "data" }, el("tr", {}, el("th", {}, "User"), el("th", {}, "Role"), el("th", {}, "Organisation"), el("th")));
-    for (const m of ms) tbl.appendChild(el("tr", {}, el("td", {}, m.username), el("td", {}, m.role), el("td", {}, m.organisation || ""),
-      el("td", {}, m.role !== "owner" ? button("✕", async () => { await api.collab.removeMember(pid, m.user_id); renderMembers(); }, "btn small danger") : null)));
-    membersEl.append(tbl, el("div", { class: "btn-row" }, uname, role, button("Add", async () => {
-      try { await api.collab.addMember(pid, uname.value.trim(), role.value); uname.value = ""; renderMembers(); toast("Member added", "ok"); } catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); }
-    }, "btn small primary")), el("p", { class: "hint" }, "Projects are visible to everyone in the organisation unless set to private in Settings. Members can take the editing turn on alignments."));
+    for (const m of ms) {
+      let roleCell: HTMLElement;
+      if (isOwner && m.role !== "owner") {
+        const sel = select([{ value: "viewer", label: "viewer" }, { value: "editor", label: "editor" }], m.role, { class: "mini" });
+        sel.addEventListener("change", async () => { try { await api.collab.setRole(pid, m.user_id, sel.value); toast("Role changed", "ok"); } catch (e) { err(e); renderMembers(); } });
+        roleCell = sel;
+      } else roleCell = el("span", { class: `badge${m.role === "owner" ? " ok" : ""}` }, m.role);
+      tbl.appendChild(el("tr", {}, el("td", {}, m.username), el("td", {}, roleCell), el("td", {}, m.organisation || ""),
+        el("td", {}, isOwner && m.role !== "owner" ? button("✕", async () => { try { await api.collab.removeMember(pid, m.user_id); renderMembers(); } catch (e) { err(e); } }, "btn small danger") : null)));
+    }
+    membersEl.appendChild(tbl);
+    if (isOwner) {
+      const vis = select([{ value: "private", label: "private - members only" }, { value: "org", label: "organisation - everyone in my organisation" }, { value: "public", label: "public - anyone can view" }],
+        String((ws.project.settings as any)?.visibility || "org"));
+      vis.addEventListener("change", async () => {
+        try { ws.project = await api.projects.update(pid, { settings: { visibility: vis.value } }); toast(`Visibility: ${vis.value}`, "ok"); } catch (e) { err(e); }
+      });
+      membersEl.append(
+        el("div", { class: "btn-row" }, uname, role, button("Add member", async () => {
+          try { await api.collab.addMember(pid, uname.value.trim(), role.value); uname.value = ""; renderMembers(); toast("Member added", "ok"); } catch (e) { err(e); }
+        }, "btn small primary")),
+        el("div", { class: "field" }, el("span", { class: "field-label" }, "Who can see this project"), vis),
+        el("div", { class: "btn-row" }, button("Transfer ownership…", async () => {
+          const to = prompt("Username of the new owner (you stay as an editor)");
+          if (!to) return;
+          try { await api.collab.transfer(pid, to.trim()); toast(`Ownership transferred to ${to}`, "ok"); ws.project = await api.projects.get(pid); renderMembers(); } catch (e) { err(e); }
+        }, "btn small")),
+        el("p", { class: "hint" }, "You are the owner: only you (or an administrator) can add or remove members, change roles, change visibility, archive or delete this project. Editors change data and designs, viewers read and comment."));
+    } else {
+      membersEl.appendChild(el("p", { class: "hint" }, `You are ${ws.project.my_role || "a member"} here. The owner manages members and visibility.`));
+    }
   }
-  host.append(el("h3", {}, "Team"), el("div", { class: "card" }, membersEl));
+  host.append(el("h3", {}, "Team & sharing"), el("div", { class: "card" }, membersEl));
   void renderMembers();
 
   // comments

@@ -18,7 +18,35 @@ class RegisterIn(BaseModel):
     organisation: str = ""
 
 
+class UserCreateIn(BaseModel):
+    """Admin creates an account and hands the username / password to the person."""
+    username: str = Field(min_length=3, max_length=40, pattern=r"^[A-Za-z0-9_.@-]+$")
+    password: str = Field(min_length=8, max_length=200)
+    role: Literal["viewer", "editor", "admin"] = "editor"
+    organisation: str = ""
+    full_name: str = ""
+    email: str = ""
+    notes: str = ""
+
+
+class UserPatchIn(BaseModel):
+    role: Literal["viewer", "editor", "admin"] | None = None
+    organisation: str | None = None
+    full_name: str | None = None
+    email: str | None = None
+    notes: str | None = None
+    disabled: bool | None = None
+    password: str | None = Field(None, min_length=8, max_length=200)
+
+
 class UserOut(BaseModel):
+    authenticated: bool = True
+    guest: bool = False
+    quota: dict[str, Any] | None = None
+    claimed_projects: int = 0
+    full_name: str = ""
+    email: str = ""
+
     id: str
     username: str
     role: str = "editor"
@@ -43,6 +71,9 @@ class ProjectUpdate(BaseModel):
 
 class ProjectOut(BaseModel):
     id: str
+    owner_id: str | None = None
+    status: str = "active"
+    my_role: str | None = None
     name: str
     description: str = ""
     crs: str = "local"
@@ -274,6 +305,11 @@ class HelmertRequest(BaseModel):
 
 class JobOut(BaseModel):
     id: str
+    user_id: str | None = None
+    priority: int = 0
+    queue_position: int | None = None
+    queue_length: int | None = None
+    eta_seconds: int | None = None
     project_id: str
     kind: str
     status: str

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from ..auth import current_user, require_editor
 from ..db import AppDB
-from ..deps import get_db, get_project, get_settings, get_store, raise_service
+from ..deps import get_db, get_project, get_settings, get_store, guest_check, heavy, memory_guard, raise_service, require_project
 from ..gpkg import ProjectStore
 from ..jobs import execute_job
 from ..schemas import JobOut, ProfileRequest, TinParams, TinRunOut
@@ -17,39 +16,52 @@ router = APIRouter(prefix="/projects/{project_id}", tags=["tin"])
 
 
 def start_job(kind: str, params: dict, project_id: str, sync: bool, background: BackgroundTasks, db: AppDB, settings,
-              user: dict | None = None) -> dict:
-    job = db.create_job(project_id, kind, params)
+              user: dict | None = None, request: Request | None = None) -> dict:
+    """Run a job now (small input and a free heavy slot), or queue it.
+
+    Queued jobs are executed by this process (job_mode=inline) or by `plm.worker` (job_mode=worker).
+    Guests queue behind accounts (priority 10). The returned job carries its queue position."""
+    priority = 10 if (user or {}).get("guest") else 0
+    job = db.create_job(project_id, kind, params, user_id=(user or {}).get("id"), priority=priority)
     keys = ("interval", "major_every", "left", "right", "alignment_id", "run_id", "boundary_mode", "constraint_mode",
             "max_edge_length", "max_edge_factor", "min_angle_deg")
     db.log(project_id, user, f"{kind}_started", "job", job["id"], {k: v for k, v in params.items() if k in keys})
-    if sync:
-        out = execute_job(job["id"], settings, db) or job
+    slots = getattr(request.app.state, "heavy", None) if request is not None else None
+    if sync and (slots is None or slots.acquire()):
+        try:
+            out = execute_job(job["id"], settings, db) or job
+        finally:
+            if slots is not None:
+                slots.release()
         db.log(project_id, user, f"{kind}_{out['status']}", "job", job["id"], {"result_id": (out.get("result") or {}).get("id")})
-        return out
-    background.add_task(execute_job, job["id"], settings)
-    return job
+        return out | db.queue_info(out)
+    if settings.job_mode != "worker":
+        background.add_task(execute_job, job["id"], settings)
+    return job | db.queue_info(job)
 
 
 @router.post("/tin", response_model=JobOut, status_code=202)
-def create_tin(project_id: str, body: TinParams, background: BackgroundTasks, p: dict = Depends(get_project),
-               store: ProjectStore = Depends(get_store), db: AppDB = Depends(get_db), settings=Depends(get_settings), user: dict = Depends(require_editor)):
+def create_tin(project_id: str, body: TinParams, background: BackgroundTasks, request: Request, p: dict = Depends(get_project),
+               store: ProjectStore = Depends(get_store), db: AppDB = Depends(get_db), settings=Depends(get_settings), user: dict = Depends(require_project("editor"))):
     n = store.count_points()
     if n < 3:
         raise HTTPException(status_code=400, detail="import at least three points first")
+    guest_check(settings, db, user, tin_runs=len(store.tin_runs()))
+    memory_guard(n)
     sync = body.sync if body.sync is not None else n <= settings.sync_point_limit
-    job = start_job("tin", body.model_dump(), project_id, sync, background, db, settings, user)
+    job = start_job("tin", body.model_dump(), project_id, sync, background, db, settings, user, request)
     if job["status"] == "error":
         raise HTTPException(status_code=400, detail=job.get("error"))
     return JobOut(**job)
 
 
 @router.get("/tin", response_model=list[TinRunOut])
-def list_runs(project_id: str, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def list_runs(project_id: str, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     return [TinRunOut(**{k: v for k, v in r.items() if k != "issues"} | {"issues": r["issues"][:50]}) for r in store.tin_runs()]
 
 
 @router.get("/tin/{run_id}", response_model=TinRunOut)
-def get_run(project_id: str, run_id: int, issues_limit: int = Query(500, ge=0), p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def get_run(project_id: str, run_id: int, issues_limit: int = Query(500, ge=0), p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     r = store.get_tin_run(run_id)
     if r is None:
         raise HTTPException(status_code=404, detail="TIN run not found")
@@ -58,15 +70,15 @@ def get_run(project_id: str, run_id: int, issues_limit: int = Query(500, ge=0), 
 
 
 @router.delete("/tin/{run_id}", status_code=204)
-def delete_run(project_id: str, run_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_editor)):
+def delete_run(project_id: str, run_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("editor"))):
     if not store.delete_tin_run(run_id):
         raise HTTPException(status_code=404, detail="TIN run not found")
     services.evict_tin(store.path, run_id)
     return None
 
 
-@router.get("/tin/{run_id}/tiles")
-def tiles(project_id: str, run_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+@router.get("/tin/{run_id}/tiles", dependencies=[Depends(heavy)])
+def tiles(project_id: str, run_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     """Tile index of a big mesh: N x N grid, per-tile triangle counts and bounds. Fetch each tile
     from /tin/{run_id}/tiles/{i}/{j}.bin (same format as mesh.bin)."""
     try:
@@ -78,7 +90,7 @@ def tiles(project_id: str, run_id: int, p: dict = Depends(get_project), store: P
 
 @router.get("/tin/{run_id}/tiles/{i}/{j}.bin")
 def tile_mesh(project_id: str, run_id: int, i: int, j: int, crs: str | None = None, p: dict = Depends(get_project),
-              store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+              store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     try:
         _, tin = services.load_tin(store, run_id)
         data = services.tile_mesh_binary(tin, i, j, p.get("crs"), crs)
@@ -88,7 +100,7 @@ def tile_mesh(project_id: str, run_id: int, i: int, j: int, crs: str | None = No
 
 
 @router.get("/tin/{run_id}/mesh.bin")
-def mesh_bin(project_id: str, run_id: int, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def mesh_bin(project_id: str, run_id: int, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     try:
         _, tin = services.load_tin(store, run_id)
         data = services.mesh_binary(tin, p.get("crs"), crs)
@@ -98,7 +110,7 @@ def mesh_bin(project_id: str, run_id: int, crs: str | None = None, p: dict = Dep
 
 
 @router.get("/tin/{run_id}/mesh.json")
-def mesh_json(project_id: str, run_id: int, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def mesh_json(project_id: str, run_id: int, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     try:
         _, tin = services.load_tin(store, run_id)
         return JSONResponse(services.mesh_json(tin, p.get("crs"), crs))
@@ -107,7 +119,7 @@ def mesh_json(project_id: str, run_id: int, crs: str | None = None, p: dict = De
 
 
 @router.get("/tin/{run_id}/hull.geojson")
-def hull(project_id: str, run_id: int, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def hull(project_id: str, run_id: int, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     try:
         _, tin = services.load_tin(store, run_id)
         return JSONResponse(services.hull_geojson(tin, p.get("crs"), crs))
@@ -116,7 +128,7 @@ def hull(project_id: str, run_id: int, crs: str | None = None, p: dict = Depends
 
 
 @router.get("/tin/{run_id}/issues.geojson")
-def issues_geojson(project_id: str, run_id: int, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def issues_geojson(project_id: str, run_id: int, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     r = store.get_tin_run(run_id)
     if r is None:
         raise HTTPException(status_code=404, detail="TIN run not found")
@@ -135,7 +147,7 @@ def issues_geojson(project_id: str, run_id: int, crs: str | None = None, p: dict
 
 @router.get("/tin/{run_id}/rejected.geojson")
 def rejected_geojson(project_id: str, run_id: int, crs: str | None = None, limit: int = Query(50000, ge=1, le=500000),
-                     p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+                     p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     """Triangles removed from the raw triangulation (outside boundary, in holes, long edge, low quality)."""
     try:
         return JSONResponse(services.rejected_geojson(store, run_id, p.get("crs"), crs, limit))
@@ -144,7 +156,7 @@ def rejected_geojson(project_id: str, run_id: int, crs: str | None = None, limit
 
 
 @router.get("/tin/{run_id}/elevation")
-def elevation(project_id: str, run_id: int, x: float, y: float, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def elevation(project_id: str, run_id: int, x: float, y: float, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     """Spot height at (x, y). Pass crs=EPSG:4326 to give lon/lat."""
     try:
         _, tin = services.load_tin(store, run_id)
@@ -157,8 +169,8 @@ def elevation(project_id: str, run_id: int, x: float, y: float, crs: str | None 
     return {"x": x, "y": y, "z": None if np.isnan(z) else float(z), "inside": not bool(np.isnan(z))}
 
 
-@router.post("/tin/{run_id}/profile")
-def adhoc_profile(project_id: str, run_id: int, body: ProfileRequest, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+@router.post("/tin/{run_id}/profile", dependencies=[Depends(heavy)])
+def adhoc_profile(project_id: str, run_id: int, body: ProfileRequest, crs: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     """Ground line along an arbitrary polyline (quick profile tool)."""
     try:
         _, tin = services.load_tin(store, run_id)

@@ -10,12 +10,19 @@ export class ApiError extends Error {
   }
 }
 
-export interface User { id: string; username: string; role: string; organisation: string; authenticated: boolean }
-export interface AuthStatus { auth_enabled: boolean; open_registration: boolean; users: number; version: string }
+export interface User { id: string; username: string; role: string; organisation: string; authenticated: boolean; guest?: boolean; full_name?: string; email?: string; claimed_projects?: number;
+  quota?: { max_points: number; max_projects: number; max_tin_runs: number; ttl_days: number; projects: number } | null }
+export interface AuthStatus { auth_enabled: boolean; open_registration: boolean; users: number; version: string; guest_enabled?: boolean; guest_quota?: { max_points: number; max_projects: number; ttl_days: number } }
+export interface AdminUser { id: string; username: string; role: string; organisation: string; created: string; disabled: number; full_name?: string; email?: string; notes?: string }
+export interface CatalogueItem { id: string; project_id: string; kind: "tin" | "design"; ref_id: number; name: string; module: string; crs: string | null; footprint: any | null; bounds: number[] | null;
+  lon: number | null; lat: number | null; points: number | null; triangles: number | null; z_min: number | null; z_max: number | null; spacing: number | null; tags: string[]; created: string; updated: string;
+  project_name: string; project_status: string; my_role: string | null; description: string }
+export interface Health { status: string; version: string; auth_enabled: boolean; guest_enabled: boolean; job_mode: string; queue: { pending: number; running: number }; load: { heavy_in_use: number; heavy_capacity: number; available_mb: number | null }; busy: boolean }
 export interface CrsInfo { spec: string; name: string; is_local: boolean; epsg: number | null; proj4?: string | null; is_geographic?: boolean }
 export interface ProjectSummary { points: number; lines: Record<string, number>; tin_runs: number; contour_sets: number; alignments: number; section_sets: number; bounds: number[] | null; z_range: number[] | null; designs?: Record<string, number> }
-export interface Project { id: string; name: string; description: string; crs: string; crs_info: CrsInfo; created: string; updated: string; settings: Record<string, unknown>; summary: ProjectSummary }
-export interface Job { id: string; project_id: string; kind: string; status: string; progress: number; message: string; params: Record<string, unknown>; result: Record<string, any> | null; error: string | null; created: string }
+export interface Project { id: string; name: string; description: string; crs: string; crs_info: CrsInfo; created: string; updated: string; settings: Record<string, unknown>; summary: ProjectSummary; owner_id?: string | null; status?: string; my_role?: string | null }
+export interface Job { id: string; project_id: string; kind: string; status: string; progress: number; message: string; params: Record<string, unknown>; result: Record<string, any> | null; error: string | null; created: string;
+  queue_position?: number | null; queue_length?: number | null; eta_seconds?: number | null; priority?: number }
 export interface TinRun { id: number; created: string; name: string; params: Record<string, unknown>; stats: Record<string, any>; n_nodes: number; n_triangles: number; bounds: (number | null)[]; z_range: (number | null)[]; issues_count: number; issues: { kind: string; x: number; y: number; message: string }[] }
 export interface ContourStyle { major_color: string; minor_color: string; major_width: number; minor_width: number; ramp: string | null; opacity: number; label_format: string; label_prefix: string; label_suffix: string; label_every: number; label_major_only: boolean; text_height: number; show_labels: boolean }
 export interface ContourSet { id: number; run_id: number; created: string; name: string; params: Record<string, any>; style: Partial<ContourStyle>; n_lines: number; levels: number[] }
@@ -34,7 +41,12 @@ export interface Design { id: number; module: string; name: string; tin_run_id: 
 export interface PointDetail { fid: number; id: string; x: number; y: number; z: number; remark: string; layer: string; source: string }
 export interface TileIndex { n: number; tile_triangles: number; n_triangles: number; n_nodes: number; bounds: number[]; z_range: number[]; tiles: { i: number; j: number; triangles: number; bounds: number[] }[] }
 
-async function request<T>(method: string, url: string, body?: unknown, init: RequestInit = {}): Promise<T> {
+/** Lightweight notification channel so this module never imports the UI store. */
+export function notify(text: string, kind = "info"): void {
+  document.dispatchEvent(new CustomEvent("plm:toast", { detail: { text, kind } }));
+}
+
+async function request<T>(method: string, url: string, body?: unknown, init: RequestInit = {}, attempt = 0): Promise<T> {
   const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
   let payload: BodyInit | undefined;
   if (body instanceof FormData) payload = body;
@@ -43,6 +55,13 @@ async function request<T>(method: string, url: string, body?: unknown, init: Req
     payload = JSON.stringify(body);
   }
   const res = await fetch(url, { method, body: payload, credentials: "same-origin", ...init, headers });
+  if (res.status === 503 && attempt < 2) {
+    // the server is busy: honour Retry-After and try again instead of failing the user's action
+    const wait = Math.min(Math.max(Number(res.headers.get("retry-after") || 10), 2), 30);
+    notify(`Server busy - retrying in ${wait} s`, "info");
+    await new Promise((r) => setTimeout(r, wait * 1000));
+    return request<T>(method, url, body, init, attempt + 1);
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -66,20 +85,30 @@ const q = (params: Record<string, unknown>) => {
 };
 
 export const api = {
-  health: () => request<{ status: string; version: string; auth_enabled: boolean }>("GET", "/api/health"),
   auth: {
     status: () => request<AuthStatus>("GET", "/api/auth/status"),
     me: () => request<User>("GET", "/api/auth/me"),
     login: (username: string, password: string) => request<User>("POST", "/api/auth/login", { username, password }),
     register: (username: string, password: string, organisation: string) => request<User>("POST", "/api/auth/register", { username, password, organisation }),
     logout: () => request<{ ok: boolean }>("POST", "/api/auth/logout"),
+    users: () => request<AdminUser[]>("GET", "/api/auth/users"),
+    createUser: (body: Record<string, unknown>) => request<AdminUser>("POST", "/api/auth/users", body),
+    patchUser: (id: string, body: Record<string, unknown>) => request<AdminUser>("PATCH", `/api/auth/users/${id}`, body),
+  },
+  health: () => request<Health>("GET", "/api/health"),
+  catalogue: {
+    list: (params: Record<string, unknown> = {}) => request<CatalogueItem[]>("GET", `/api/catalogue${q(params)}`),
+    clone: (id: string, name?: string) => request<Project>("POST", `/api/catalogue/${id}/clone`, { name }),
   },
   crs: {
     presets: () => request<{ key: string; name: string; definition: string | null; description: string }[]>("GET", "/api/crs/presets"),
     describe: (spec: string) => request<CrsInfo>("GET", `/api/crs/describe${q({ spec })}`),
   },
   projects: {
-    list: () => request<Project[]>("GET", "/api/projects"),
+    list: (includeArchived = true) => request<Project[]>("GET", `/api/projects${q({ include_archived: includeArchived })}`),
+    archive: (id: string) => request<Project>("POST", `/api/projects/${id}/archive`),
+    restore: (id: string) => request<Project>("POST", `/api/projects/${id}/restore`),
+    archiveUrl: (id: string) => `/api/projects/${id}/archive.zip`,
     create: (body: { name: string; crs: string; description?: string }) => request<Project>("POST", "/api/projects", body),
     get: (id: string) => request<Project>("GET", `/api/projects/${id}`),
     update: (id: string, body: Record<string, unknown>) => request<Project>("PATCH", `/api/projects/${id}`, body),
@@ -186,6 +215,8 @@ export const api = {
     members: (pid: string) => request<Member[]>("GET", `/api/projects/${pid}/members`),
     addMember: (pid: string, username: string, role = "editor") => request<Member[]>("POST", `/api/projects/${pid}/members`, { username, role }),
     removeMember: (pid: string, uid: string) => request<Member[]>("DELETE", `/api/projects/${pid}/members/${uid}`),
+    setRole: (pid: string, uid: string, role: string) => request<Member[]>("PATCH", `/api/projects/${pid}/members/${uid}`, { role }),
+    transfer: (pid: string, username: string) => request<Member[]>("POST", `/api/projects/${pid}/transfer`, { username }),
     comments: (pid: string, params: Record<string, unknown> = {}) => request<Comment[]>("GET", `/api/projects/${pid}/comments${q(params)}`),
     addComment: (pid: string, body: Record<string, unknown>) => request<Comment>("POST", `/api/projects/${pid}/comments`, body),
     patchComment: (pid: string, id: string, body: Record<string, unknown>) => request<Comment>("PATCH", `/api/projects/${pid}/comments/${id}`, body),
@@ -193,6 +224,16 @@ export const api = {
     activity: (pid: string, since = 0) => request<{ activity: Activity[]; locks: Lock[] }>("GET", `/api/projects/${pid}/activity${q({ since })}`),
   },
 };
+
+/** Human text for a job's state while waiting: queue position and estimate, or progress. */
+export function jobStatusText(j: Job, verb: string): string {
+  if (j.status === "pending") {
+    const pos = j.queue_position ? `${j.queue_position}${j.queue_length ? ` of ${j.queue_length}` : ""}` : "";
+    const eta = j.eta_seconds ? `, about ${j.eta_seconds >= 90 ? `${Math.round(j.eta_seconds / 60)} min` : `${j.eta_seconds} s`}` : "";
+    return pos ? `Waiting in queue: ${pos}${eta}` : "Waiting in queue";
+  }
+  return `${verb} ${Math.round((j.progress || 0) * 100)}%`;
+}
 
 /** Poll a job until it finishes (for background jobs). */
 export async function waitForJob(job: Job, onProgress?: (j: Job) => void, intervalMs = 1500): Promise<Job> {

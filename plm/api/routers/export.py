@@ -5,13 +5,13 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from ..auth import current_user
-from ..deps import get_project, get_settings, get_store, raise_service
+from ..deps import get_project, get_settings, get_store, no_guest, raise_service, require_project
 from ..gpkg import ProjectStore
 from .. import services
 from ..services import ServiceError
 
-router = APIRouter(prefix="/projects/{project_id}", tags=["export"])
+# exports are for signed-in users: guests get a 403 with a hint to sign in
+router = APIRouter(prefix="/projects/{project_id}", tags=["export"], dependencies=[Depends(no_guest)])
 
 
 def _safe(name: str) -> str:
@@ -29,7 +29,7 @@ def export_dxf(project_id: str, run_id: int | None = None, contour_sets: str | N
                points: bool = True, tin: bool = False, contours: bool = True, features: bool = True, boundary: bool = True,
                labels: bool = True, alignments: str | None = Query(None), section_set: int | None = None,
                chainage_interval: float = Query(20.0, gt=0), arc_smoothing: bool = False, text_height: float | None = Query(None, gt=0),
-               point_block: bool = True, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), settings=Depends(get_settings), _: dict = Depends(current_user)):
+               point_block: bool = True, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), settings=Depends(get_settings), _: dict = Depends(require_project("viewer"))):
     out = settings.project_dir(project_id) / f"{_safe(p['name'])}.dxf"
     try:
         services.export_dxf(store, out, run_id=run_id, contour_set_ids=_ids(contour_sets), include_points=points, include_tin=tin,
@@ -42,7 +42,7 @@ def export_dxf(project_id: str, run_id: int | None = None, contour_sets: str | N
 
 
 @router.get("/export.gpkg")
-def export_gpkg(project_id: str, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def export_gpkg(project_id: str, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     if not store.path.exists():
         raise HTTPException(status_code=404, detail="no data")
     return FileResponse(store.path, media_type="application/geopackage+sqlite3", filename=f"{_safe(p['name'])}.gpkg")
@@ -50,7 +50,7 @@ def export_gpkg(project_id: str, p: dict = Depends(get_project), store: ProjectS
 
 @router.get("/export.geojson")
 def export_geojson(project_id: str, crs: str | None = None, contour_set: int | None = None, p: dict = Depends(get_project),
-                   store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+                   store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     """Everything in one FeatureCollection (points, lines, latest/selected contours, alignments)."""
     try:
         feats = []

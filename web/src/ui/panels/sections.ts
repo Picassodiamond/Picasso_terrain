@@ -1,4 +1,4 @@
-import { api, ApiError, waitForJob } from "../../api";
+import { api, ApiError, jobStatusText, waitForJob } from "../../api";
 import { store, toast } from "../../state";
 import { button, download, el, field, fmt, fmtChainage, numberInput, parseChainage, select } from "../dom";
 import type { Workspace } from "../workspace";
@@ -25,7 +25,7 @@ export function renderSectionsPanel(ws: Workspace, host: HTMLElement): void {
       let job = await api.sections.create(pid, { alignment_id: Number(alSel.value), run_id: Number(runSel.value), interval: Number(interval.value), profile_interval: Number(profInt.value),
         left: Number(left.value), right: Number(right.value), include_curve_points: curvePts.checked, include_edge_crossings: edges.checked, name: name.value,
         extra_chainages: extra.value.split(/[;,]/).map((s) => s.trim()).filter(Boolean).map(parseChainage) });
-      job = await waitForJob(job);
+      job = await waitForJob(job, (j) => store.set("busy", jobStatusText(j, "Generating sections")));
       toast(`${job.result?.summary?.sections ?? ""} cross-sections generated`, "ok");
       store.set("currentSectionIndex", 0);
       const sets = await api.sections.list(pid);

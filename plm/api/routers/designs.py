@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth import current_user, require_editor
+from ..auth import current_user
 from ..db import AppDB
-from ..deps import get_db, get_project, get_store
+from ..deps import get_db, get_project, get_store, require_project
 from ..gpkg import ProjectStore
+from .. import catalogue
 from ..modules import MODULES, available_design_modules, module
 from ..schemas import DesignIn, DesignOut, DesignPatch
 
@@ -26,13 +27,13 @@ def list_modules(_: dict = Depends(current_user)):
 
 @router.get("/projects/{project_id}/designs", response_model=list[DesignOut])
 def list_designs(project_id: str, module_id: str | None = None, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                 _: dict = Depends(current_user)):
+                 _: dict = Depends(require_project("viewer"))):
     return [DesignOut(**d) for d in store.designs(module_id)]
 
 
 @router.post("/projects/{project_id}/designs", response_model=DesignOut, status_code=201)
 def create_design(project_id: str, body: DesignIn, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                  db: AppDB = Depends(get_db), user: dict = Depends(require_editor)):
+                  db: AppDB = Depends(get_db), user: dict = Depends(require_project("editor"))):
     m = module(body.module)
     if m is None or m["kind"] != "design":
         raise HTTPException(status_code=400, detail=f"unknown design module {body.module!r}; available: {available_design_modules()}")
@@ -50,11 +51,13 @@ def create_design(project_id: str, body: DesignIn, p: dict = Depends(get_project
     did = store.add_design(body.module, name, run_id, body.alignment_id, body.settings)
     db.log(project_id, user, "design_created", "design", str(did), {"module": body.module, "tin_run_id": run_id})
     db.touch_project(project_id)
-    return DesignOut(**store.get_design(did))  # type: ignore[arg-type]
+    d = store.get_design(did)
+    catalogue.record_design(db, p, store, d)  # type: ignore[arg-type]
+    return DesignOut(**d)  # type: ignore[arg-type]
 
 
 @router.get("/projects/{project_id}/designs/{design_id}", response_model=DesignOut)
-def get_design(project_id: str, design_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+def get_design(project_id: str, design_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("viewer"))):
     d = store.get_design(design_id)
     if d is None:
         raise HTTPException(status_code=404, detail="design not found")
@@ -63,7 +66,7 @@ def get_design(project_id: str, design_id: int, p: dict = Depends(get_project), 
 
 @router.patch("/projects/{project_id}/designs/{design_id}", response_model=DesignOut)
 def patch_design(project_id: str, design_id: int, body: DesignPatch, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                 db: AppDB = Depends(get_db), user: dict = Depends(require_editor)):
+                 db: AppDB = Depends(get_db), user: dict = Depends(require_project("editor"))):
     d = store.get_design(design_id)
     if d is None:
         raise HTTPException(status_code=404, detail="design not found")
@@ -76,14 +79,17 @@ def patch_design(project_id: str, design_id: int, body: DesignPatch, p: dict = D
     if body.tin_run_id is not None and body.tin_run_id != d.get("tin_run_id"):
         db.log(project_id, user, "design_rebased", "design", str(design_id), {"from": d.get("tin_run_id"), "to": body.tin_run_id})
     db.touch_project(project_id)
-    return DesignOut(**store.get_design(design_id))  # type: ignore[arg-type]
+    d2 = store.get_design(design_id)
+    catalogue.record_design(db, p, store, d2)  # type: ignore[arg-type]
+    return DesignOut(**d2)  # type: ignore[arg-type]
 
 
 @router.delete("/projects/{project_id}/designs/{design_id}", status_code=204)
 def delete_design(project_id: str, design_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store),
-                  db: AppDB = Depends(get_db), user: dict = Depends(require_editor)):
+                  db: AppDB = Depends(get_db), user: dict = Depends(require_project("editor"))):
     if not store.delete_design(design_id):
         raise HTTPException(status_code=404, detail="design not found")
+    db.catalogue_delete(project_id, "design", design_id)
     db.log(project_id, user, "design_deleted", "design", str(design_id), {})
     db.touch_project(project_id)
     return None

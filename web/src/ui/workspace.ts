@@ -43,6 +43,8 @@ export class Workspace {
   private statusCoords!: HTMLElement;
   private statusInfo!: HTMLElement;
   private switcherHost!: HTMLElement;
+  private loadBanner!: HTMLElement;
+  private healthTimer: number | null = null;
   private toolHint!: HTMLElement;
   private busyEl!: HTMLElement;
   private chartsEl!: HTMLElement;
@@ -167,6 +169,12 @@ export class Workspace {
     this.statusInfo = el("span");
     const statusbar = el("div", { class: "statusbar" }, this.statusCoords, this.statusInfo);
     const mapWrap = el("div", { class: "map-wrap" }, cesiumDiv, this.toolHint, this.busyEl, statusbar);
+    // access / state banners
+    if (this.project.status === "archived") mapWrap.appendChild(el("div", { class: "ws-banner warn" }, "Archived project - read-only. ", this.project.my_role === "owner" ? "Restore it under Settings to make changes." : "The owner can restore it."));
+    else if (this.project.my_role === "viewer") mapWrap.appendChild(el("div", { class: "ws-banner" }, "View-only access: you can browse and comment; ask the owner for the editor role to make changes."));
+    else if (store.get("user")?.guest) mapWrap.appendChild(el("div", { class: "ws-banner" }, "Guest sandbox - limited points, no exports, deleted after a few days. ", button("Sign in", () => store.emit("auth:login"), "btn small")));
+    this.loadBanner = el("div", { class: "ws-banner load", style: "display:none" });
+    mapWrap.appendChild(this.loadBanner);
 
     this.profileEl = el("div");
     this.sectionEl = el("div");
@@ -217,7 +225,27 @@ export class Workspace {
     this.showTab("data");
     this.zoomToData();
     this.startPolling();
+    this.startHealthPolling();
     this.updateStatus();
+  }
+
+  /** Every 20 s: show a banner when the server queue is long or all heavy slots are taken. */
+  private startHealthPolling(): void {
+    const tick = async () => {
+      try {
+        const h = await api.health();
+        if (h.busy) {
+          const parts = [];
+          if (h.queue.pending) parts.push(`${h.queue.pending} job${h.queue.pending > 1 ? "s" : ""} waiting`);
+          if (h.queue.running) parts.push(`${h.queue.running} running`);
+          if (h.load.heavy_in_use >= h.load.heavy_capacity) parts.push("all processing slots in use");
+          this.loadBanner.textContent = `Server is busy (${parts.join(", ")}). New builds will queue; you will see your position.`;
+          this.loadBanner.style.display = "";
+        } else this.loadBanner.style.display = "none";
+      } catch { /* offline: nothing to show */ }
+    };
+    void tick();
+    this.healthTimer = window.setInterval(() => void tick(), 20_000);
   }
 
   private setupSplitter(splitter: HTMLElement): void {
@@ -637,6 +665,7 @@ export class Workspace {
   }
 
   destroy(): void {
+    if (this.healthTimer) { window.clearInterval(this.healthTimer); this.healthTimer = null; }
     if (this.pollTimer) window.clearInterval(this.pollTimer);
     this.unsub.forEach((u) => u());
     window.removeEventListener("keydown", this.onKey);

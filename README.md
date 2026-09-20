@@ -31,6 +31,7 @@ plm/
   examples/      demo data generators; examples/realworld/ real SRTM terrain sample (Nagarkot, UTM 45N)
   plm/api/modules.py  module registry (terrain core + design modules)
   web/src/modules/    design workspaces (road: plan / profile / section shell)
+  plm/api/catalogue.py, archive.py   asset library, archive bundles, backups
   passenger_wsgi.py   cPanel / Passenger entry point
 ```
 
@@ -83,6 +84,28 @@ max_edge_length=..., min_angle_deg=...)` -> `TinResult` (TIN, rejected triangles
 `contour_tin(tin, interval, clip=...)`. API: `POST /constraints/detect`, `POST /constraints/accept`,
 `GET /constraints`, `DELETE /constraints/auto`, `POST /tin` with `constraint_mode`, `GET /tin/{run}/rejected.geojson`.
 
+## Accounts, sharing, guests, archive, load
+
+* **Invite-only accounts.** With `PLM_AUTH_ENABLED=1` the first registration creates the administrator; after that
+  self-registration is closed and the admin creates every account (username, password, role, organisation, name,
+  email) on the **Admin** page or with `python -m plm.admin create-user`. Passwords are reset and accounts disabled there too.
+* **Project roles.** owner (one per project, `owner_id`), editor, viewer. Only the owner (or an admin) adds or removes
+  members, changes roles, changes visibility (private / organisation / public), transfers ownership, archives or
+  deletes. Editors change data and designs; viewers read and comment. Every project route checks the role.
+* **Guest sandbox** (`PLM_GUEST_ENABLED`, default on): visitors without an account get a private sandbox within quotas
+  (`PLM_GUEST_MAX_POINTS` 5000, `PLM_GUEST_MAX_PROJECTS` 2, `PLM_GUEST_MAX_TIN_RUNS` 3, no exports, deleted after
+  `PLM_GUEST_TTL_DAYS` 7). Signing in claims the sandbox projects for the account. Guest jobs queue behind accounts.
+* **Queue and load.** Jobs carry `queue_position`, `queue_length` and `eta_seconds`; the UI shows "waiting in queue: 2 of 3".
+  `PLM_JOB_MODE=worker` makes the web process only enqueue and `python -m plm.worker --loop 2` execute (one running job per
+  user, guests last). Heavy synchronous calls (detection, profiles, tiles) share `PLM_MAX_HEAVY` slots and answer
+  503 + Retry-After when full (the client retries); a memory guard refuses builds that would not fit (507).
+  `/api/health` reports queue depth and load and a `busy` flag that the workspace turns into a banner.
+* **Archive.** Owners archive a project into a portable zip (GeoPackage + meta.json) under `<data>/archive`; the project
+  becomes read-only (423 on writes) until restored. `python -m plm.admin backup [--out DIR]` writes a consistent copy of
+  the app database and every project file.
+* **Library** (`#/library`): every TIN run and design is catalogued with a WGS84 footprint, size, CRS, tags and lineage,
+  searchable by text, tag and bounding box, and can be cloned into a new project. Visibility follows the project.
+
 ## Modules and design workspaces
 
 The terrain workspace is the core. Design work happens in separate **design workspaces** (modules)
@@ -132,6 +155,7 @@ node e2e\basemap_check.mjs http://127.0.0.1:8000 <projectId>   # base map tiles 
 node e2e\constraints_check.mjs http://127.0.0.1:8000 <projectId>   # detect -> accept -> build -> rejected layer (Playwright)
 node e2e\bigdata_check.mjs http://127.0.0.1:8000 <projectId>   # tiled mesh + point cloud + nearest-point click (Playwright)
 node e2e\modules_check.mjs http://127.0.0.1:8000 <projectId>   # terrain -> Open in Road design -> plan / profile / section -> back (Playwright)
+node e2e\auth_check.mjs http://127.0.0.1:8011   # accounts: guest sandbox -> sign in claims it -> library -> admin (server with PLM_AUTH_ENABLED=1)
 ```
 
 Engine API:

@@ -213,3 +213,18 @@ table.data tr.selected td { background: #1e293b; }
 .road-right select { width: auto; }
 .terrain-badge { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #14532d; color: #bbf7d0; font-size: 12px; margin: 6px 0; }
 .terrain-badge.stale { background: #78350f; color: #fde68a; }
+
+
+/* ---------------------------------------------------------------- accounts, banners, library */
+.guest-banner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: #3b2d0a; border: 1px solid #a16207; color: #fde68a; padding: 8px 12px; border-radius: 8px; margin-bottom: 14px; font-size: 12px; }
+.ws-banner { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 6; background: rgba(30,58,95,.92); color: #bae6fd; border: 1px solid #2563eb; padding: 5px 12px; border-radius: 999px; font-size: 12px; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.ws-banner.warn { background: rgba(120,53,15,.92); color: #fde68a; border-color: #a16207; }
+.ws-banner.load { top: 40px; background: rgba(127,29,29,.9); color: #fecaca; border-color: #dc2626; }
+.project-card.archived { opacity: .6; }
+.project-card h3 .badge { font-weight: 400; margin-left: 6px; }
+.lib-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; min-height: 0; }
+.lib-map { position: relative; height: 420px; background: #0b1220; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.lib-map canvas { display: block; }
+.lib-list { display: flex; flex-direction: column; gap: 0; max-height: 70vh; overflow: auto; }
+.lib-card .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+@media (max-width: 900px) { .lib-layout { grid-template-columns: 1fr; } }

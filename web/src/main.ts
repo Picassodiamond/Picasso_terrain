@@ -5,6 +5,8 @@ import { store } from "./state";
 import { el } from "./ui/dom";
 import { renderLogin } from "./ui/login";
 import { renderProjects } from "./ui/projects";
+import { renderLibrary } from "./ui/library";
+import { renderAdmin } from "./ui/admin";
 import { Workspace } from "./ui/workspace";
 import { moduleById, terrainHash, type ModuleInstance } from "./modules/registry";
 
@@ -19,6 +21,14 @@ store.subscribe("toast", ({ text, kind }: { text: string; kind: string }) => {
   const t = el("div", { class: `toast ${kind}` }, text);
   toasts.appendChild(t);
   setTimeout(() => t.remove(), kind === "error" ? 8000 : 4000);
+});
+document.addEventListener("plm:toast", (e) => store.emit("toast", (e as CustomEvent).detail));
+let authStatus: import("./api").AuthStatus | null = null;
+// "Sign in" from anywhere (guests): overlay, then reload so every view picks up the account
+store.subscribe("auth:login", () => {
+  const status = authStatus;
+  if (!status) return;
+  renderLogin(root, status, () => location.reload(), () => { destroyCurrent(); void showProjects(); });
 });
 
 interface Route { pid: string; module?: string; designId?: number }
@@ -68,14 +78,18 @@ async function openProject(p: Project): Promise<void> {
 }
 
 async function showProjects(): Promise<void> {
+  destroyCurrent();
+  if (location.hash === "#/library") { await renderLibrary(root); return; }
+  if (location.hash === "#/admin") { await renderAdmin(root); return; }
   await renderProjects(root, (p) => void openProject(p));
 }
 
 async function boot(): Promise<void> {
   const status = await api.auth.status();
+  authStatus = status;
   store.set("authEnabled", status.auth_enabled);
   try {
-    store.set("user", await api.auth.me());
+    store.set("user", await api.auth.me()); // an account, or a guest sandbox identity when guests are allowed
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
       renderLogin(root, status, () => void boot());
@@ -95,7 +109,7 @@ async function boot(): Promise<void> {
 
 window.addEventListener("hashchange", () => {
   const r = routeFromHash();
-  if (!r) { if (current) { destroyCurrent(); void showProjects(); } return; }
+  if (!r) { destroyCurrent(); void showProjects(); return; }
   openRoute(r).catch((e) => { store.emit("toast", { text: e instanceof ApiError ? e.detail : String(e), kind: "error" }); destroyCurrent(); void showProjects(); });
 });
 

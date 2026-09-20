@@ -41,6 +41,15 @@ def execute_job(job_id: str, settings: Settings, db: AppDB | None = None) -> dic
             compact["issues_count"] = len(result["issues"])
         db.update_job(job_id, status="done", progress=1.0, message="done", result=compact, finished=now_iso())
         db.touch_project(job["project_id"])
+        if job["kind"] == "tin":
+            try:
+                from . import catalogue
+
+                p = db.get_project(job["project_id"])
+                if p is not None:
+                    catalogue.record_tin(db, p, store, int(result["id"]))
+            except Exception:  # noqa: BLE001 - the catalogue must never fail a job
+                pass
     except services.ServiceError as e:
         db.update_job(job_id, status="error", error=str(e), finished=now_iso())
     except Exception as e:  # noqa: BLE001
@@ -48,9 +57,25 @@ def execute_job(job_id: str, settings: Settings, db: AppDB | None = None) -> dic
     return db.get_job(job_id)
 
 
+def maintenance(settings: Settings, db: AppDB | None = None) -> dict:
+    """Housekeeping run by the worker: delete expired guest sandboxes."""
+    import shutil
+
+    db = db or AppDB(settings.app_db_path)
+    removed = 0
+    if settings.guest_enabled:
+        for p in db.expired_guest_projects(settings.guest_ttl_days):
+            db.delete_project(p["id"])
+            services.evict_tin(settings.project_gpkg(p["id"]))
+            shutil.rmtree(settings.project_dir(p["id"]), ignore_errors=True)
+            removed += 1
+    return {"guest_projects_removed": removed}
+
+
 def run_pending_jobs(settings: Settings, max_jobs: int = 10) -> int:
     """Process pending jobs (cron worker). Returns the number of jobs executed."""
     db = AppDB(settings.app_db_path)
+    maintenance(settings, db)
     n = 0
     while n < max_jobs:
         job = db.next_pending_job()
