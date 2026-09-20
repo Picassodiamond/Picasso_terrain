@@ -156,6 +156,7 @@ export function renderAlignmentPanel(ws: Workspace, host: HTMLElement): void {
           mine ? button("Release turn", async () => { await api.alignments.unlock(pid, a.id); await ws.refreshAlignments(); renderList(); renderEditor(); }) : null,
           lock && !mine && (user?.role === "admin") ? button("Force release", async () => { await api.alignments.unlock(pid, a.id, true); await ws.refreshAlignments(); renderList(); renderEditor(); }, "btn danger") : null,
           button("Download CSV", () => download(api.alignments.csvUrl(pid, a.id))),
+          button("Open in Road design ▸", () => ws.openInRoadDesign(a.id), "btn small", ),
           button("Zoom", () => { const xs = a.ips.map((p) => p.x), ys = a.ips.map((p) => p.y); store.emit("map:flyTo", [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]); }),
           canEdit ? button("Delete", async () => { if (confirm(`Delete alignment "${a.name}"?`)) { try { await api.alignments.delete(pid, a.id); store.set("currentAlignment", null); await ws.refreshAlignments(); await ws.refreshSectionSets(); renderList(); renderEditor(); } catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); } } }, "btn danger") : null,
         ),

@@ -28,6 +28,10 @@ class Settings:
         default_factory=lambda: [o for o in os.environ.get("PLM_CORS_ORIGINS", "*").split(",") if o]
     )
     max_upload_mb: int = int(os.environ.get("PLM_MAX_UPLOAD_MB", "200"))
+    # read by plm.api.services at import: PLM_TIN_CACHE (loaded TINs kept per process, default 2)
+    # and PLM_TILE_TRIANGLES (triangles per mesh tile for the browser, default 100000)
+    tin_cache_size: int = int(os.environ.get("PLM_TIN_CACHE", "2"))
+    tile_triangles: int = int(os.environ.get("PLM_TILE_TRIANGLES", "100000"))
     web_dist: Path | None = field(
         default_factory=lambda: Path(os.environ["PLM_WEB_DIST"]).resolve() if os.environ.get("PLM_WEB_DIST") else None
     )

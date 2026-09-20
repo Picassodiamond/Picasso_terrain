@@ -77,8 +77,42 @@ export function renderDataPanel(ws: Workspace, host: HTMLElement): void {
   };
   host.append(el("h3", {}, "Draw"), el("div", { class: "card" },
     el("p", { class: "hint" }, "Feature (break) lines are honoured by the triangulation; the boundary limits the TIN; voids are excluded. Feature-line Z is taken from the TIN if one exists."),
-    el("div", { class: "btn-row" }, button("Feature line", () => startLine("feature")), button("Boundary", () => startLine("boundary")), button("Void", () => startLine("void"))),
+    el("div", { class: "btn-row" }, button("Breakline", () => startLine("feature")), button("Boundary", () => startLine("boundary")), button("Hole / void", () => startLine("void"))),
   ));
+
+  // constraint lines: review, re-kind, delete (automatic suggestions are stored with source "auto")
+  const consEl = el("div");
+  host.append(el("h3", {}, "Constraint lines"), consEl);
+  async function renderConstraints() {
+    consEl.innerHTML = "";
+    const fc = await api.data.lines(pid);
+    const feats = fc.features as any[];
+    if (!feats.length) { consEl.appendChild(el("p", { class: "muted" }, "No constraint lines yet. Draw them, import them, or let the TIN build detect the survey limit automatically.")); return; }
+    const tbl = el("table", { class: "data" }, el("tr", {}, el("th", {}, "kind"), el("th", {}, "source"), el("th", {}, "name"), el("th", {}, "pts"), el("th")));
+    for (const f of feats) {
+      const p = f.properties;
+      const coords: number[][] = f.geometry.coordinates;
+      const kindSel = select([{ value: "feature", label: "breakline" }, { value: "boundary", label: "boundary" }, { value: "void", label: "hole" }, { value: "contour", label: "contour" }], p.kind, { class: "mini", title: "Change the constraint kind" });
+      kindSel.addEventListener("change", async () => {
+        try { await api.data.updateLine(pid, p.fid, { kind: kindSel.value }); await ws.refreshLines(); renderConstraints(); }
+        catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); }
+      });
+      const fly = el("a", { href: "#", title: "Show on map", onClick: (ev: Event) => {
+        ev.preventDefault();
+        const xs = coords.map((c) => c[0]), ys = coords.map((c) => c[1]);
+        store.emit("map:flyTo", [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+      } }, p.name ? String(p.name).slice(0, 40) : `#${p.fid}`);
+      tbl.appendChild(el("tr", {}, el("td", {}, kindSel), el("td", { class: "muted", title: p.source }, p.source === "auto" ? "auto" : p.source === "accepted" ? "reviewed" : p.source === "drawn" ? "drawn" : "import"),
+        el("td", {}, fly), el("td", {}, String(coords.length)),
+        el("td", {}, button("✕", async () => { await api.data.deleteLines(pid, { fids: String(p.fid) }); await ws.refreshLines(); renderConstraints(); renderSummary(); }, "btn small danger"))));
+    }
+    const autoCount = feats.filter((f) => f.properties.source === "auto").length;
+    consEl.append(el("div", { class: "card" }, tbl,
+      el("p", { class: "hint" }, "Dashed lines on the map are automatic suggestions in use. Change a kind, delete a line, or draw a replacement; the next TIN build uses exactly this list."),
+      autoCount ? el("div", { class: "btn-row" }, button(`Remove ${autoCount} automatic`, async () => { await api.constraints.deleteAuto(pid); await ws.refreshLines(); renderConstraints(); renderSummary(); }, "btn small")) : null));
+  }
+  void renderConstraints();
+  store.subscribe("refresh:lines", () => void renderConstraints());
 
   const summary = el("div");
   host.append(el("h3", {}, "Contents"), summary);

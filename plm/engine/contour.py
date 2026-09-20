@@ -1,12 +1,21 @@
-"""Contour generation on a TIN (port of legacy `contour.frm`, corrected and vectorised)."""
+"""Contour generation on a TIN (port of legacy `contour.frm`, corrected and vectorised).
+
+Contours are derived from the validated TIN only. For each level every TIN edge is tested with a
+single consistent rule - a node is *below* when z < level, so nodes exactly on the level count as
+above - which guarantees that every triangle has either zero or exactly two crossing edges. No
+level nudging is needed, contours pass cleanly through vertices and along flat triangle edges,
+and segments are chained by the identity of the edge / vertex they cross rather than by
+coordinates, so pieces join exactly and nothing is duplicated.
+"""
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
-from shapely.geometry import LineString, MultiLineString
-from shapely.ops import linemerge
+import shapely
+from shapely.geometry import LineString
 
 from .tin import TIN
 
@@ -55,36 +64,107 @@ def is_major_level(level: float, interval: float, major_every: int, base: float 
     return abs(r - round(r)) < 1e-6
 
 
-def _segments_for_level(tin: TIN, level: float) -> np.ndarray | None:
-    """Return (s, 2, 2) array of contour segments for one level, or None."""
+# --------------------------------------------------------------------------------------
+# Segment extraction and chaining
+# --------------------------------------------------------------------------------------
+def _level_segments(tin: TIN, level: float):
+    """Contour segments for one level.
+
+    Returns (ka, kb, pts) or None: ka/kb are crossing keys per segment (edge index >= 0, or
+    -(node+1) when the contour passes exactly through a node) and `pts` maps key -> (x, y).
+    Zero-length segments (both crossings at the same node) and duplicates (a flat edge on the
+    level seen from both neighbours) are removed here.
+    """
     z = tin.nodes[:, 2]
     e = tin.edges
     z0, z1 = z[e[:, 0]], z[e[:, 1]]
-    below0 = z0 < level
-    below1 = z1 < level
-    cross = below0 != below1
+    cross = (z0 < level) != (z1 < level)
     if not cross.any():
         return None
-    # crossing point on every crossing edge (NaN elsewhere)
-    pt = np.full((len(e), 2), np.nan)
     ce = np.flatnonzero(cross)
     t = (level - z0[ce]) / (z1[ce] - z0[ce])
+    t = np.clip(t, 0.0, 1.0)
     p0 = tin.nodes[e[ce, 0], :2]
     p1 = tin.nodes[e[ce, 1], :2]
-    pt[ce] = p0 + t[:, None] * (p1 - p0)
-    # triangles with exactly two crossing edges
+    pt = p0 + t[:, None] * (p1 - p0)
+    key = ce.astype(np.int64)
+    at0 = t <= 0.0
+    at1 = t >= 1.0
+    key[at0] = -(e[ce[at0], 0] + 1)
+    key[at1] = -(e[ce[at1], 1] + 1)
+    pt[at0] = p0[at0]
+    pt[at1] = p1[at1]
+    edge_key = np.zeros(tin.n_edges, dtype=np.int64)
+    edge_key[ce] = key
+    edge_pt = np.zeros((tin.n_edges, 2))
+    edge_pt[ce] = pt
+
     tc = cross[tin.tri_edges]  # (m, 3)
-    two = tc.sum(axis=1) == 2
+    two = tc.sum(axis=1) == 2  # always 0 or 2 with the consistent rule above
     if not two.any():
         return None
     te = tin.tri_edges[two]
-    tcm = tc[two]
-    # pick the two crossing edges per triangle
-    order = np.argsort(~tcm, axis=1, kind="stable")[:, :2]  # True first
-    ea = te[np.arange(len(te)), order[:, 0]]
-    eb = te[np.arange(len(te)), order[:, 1]]
-    seg = np.stack([pt[ea], pt[eb]], axis=1)
-    return seg
+    order = np.argsort(~tc[two], axis=1, kind="stable")[:, :2]  # crossing edges first
+    rows = np.arange(len(te))
+    ea = te[rows, order[:, 0]]
+    eb = te[rows, order[:, 1]]
+    ka, kb = edge_key[ea], edge_key[eb]
+    valid = ka != kb
+    ka, kb, ea, eb = ka[valid], kb[valid], ea[valid], eb[valid]
+    if not len(ka):
+        return None
+    pair = np.sort(np.stack([ka, kb], axis=1), axis=1)
+    _, first = np.unique(pair, axis=0, return_index=True)
+    first = np.sort(first)
+    ka, kb, ea, eb = ka[first], kb[first], ea[first], eb[first]
+    pts: dict[int, np.ndarray] = {}
+    for k, ei in zip(np.concatenate([ka, kb]), np.concatenate([ea, eb])):
+        pts[int(k)] = edge_pt[ei]
+    return ka, kb, pts
+
+
+def _chain(ka: np.ndarray, kb: np.ndarray, pts: dict[int, np.ndarray]) -> list[tuple[np.ndarray, bool]]:
+    """Chain segments sharing crossing keys into polylines. Junctions (a contour crossing itself
+    at a saddle vertex, degree > 2) end a chain so every output line is unambiguous."""
+    n = len(ka)
+    adj: dict[int, list[int]] = defaultdict(list)
+    for i in range(n):
+        adj[int(ka[i])].append(i)
+        adj[int(kb[i])].append(i)
+    used = np.zeros(n, dtype=bool)
+    out: list[tuple[np.ndarray, bool]] = []
+
+    def walk(seg: int, key: int) -> list[int]:
+        keys = [key]
+        cur_key, cur_seg = key, seg
+        while True:
+            used[cur_seg] = True
+            nxt = int(kb[cur_seg]) if int(ka[cur_seg]) == cur_key else int(ka[cur_seg])
+            keys.append(nxt)
+            nbrs = adj[nxt]
+            if len(nbrs) != 2:
+                break
+            nseg = nbrs[0] if nbrs[0] != cur_seg else nbrs[1]
+            if used[nseg]:
+                break
+            cur_key, cur_seg = nxt, nseg
+        return keys
+
+    # open chains start at ends and junctions
+    for key, segs in adj.items():
+        if len(segs) == 2:
+            continue
+        for seg in segs:
+            if not used[seg]:
+                ks = walk(seg, key)
+                out.append((np.array([pts[k] for k in ks]), False))
+    # what remains are closed loops
+    for seg in range(n):
+        if not used[seg]:
+            ks = walk(seg, int(ka[seg]))
+            closed = ks[0] == ks[-1]
+            out.append((np.array([pts[k] for k in ks]), closed))
+    return out
 
 
 def _thin(coords: np.ndarray, min_spacing: float, closed: bool) -> np.ndarray:
@@ -131,6 +211,14 @@ def chaikin(coords: np.ndarray, iterations: int = 2, closed: bool = False) -> np
     return c
 
 
+def _clip_line(coords: np.ndarray, clip) -> list[np.ndarray]:
+    g = shapely.intersection(LineString(coords), clip)
+    if g.is_empty:
+        return []
+    parts = list(g.geoms) if hasattr(g, "geoms") else [g]
+    return [np.asarray(p.coords, dtype=np.float64)[:, :2] for p in parts if p.geom_type == "LineString" and len(p.coords) >= 2]
+
+
 def contour_tin(
     tin: TIN,
     interval: float,
@@ -141,6 +229,7 @@ def contour_tin(
     smoothing: str = "none",
     smooth_iterations: int = 2,
     min_length: float = 0.0,
+    clip=None,
 ) -> list[ContourLine]:
     """Generate contour polylines from a TIN.
 
@@ -149,35 +238,30 @@ def contour_tin(
     min_spacing   drop vertices closer than this along a contour (legacy `min_dist`)
     smoothing     'none' | 'chaikin'   ('arc' bulge smoothing is applied only by the DXF exporter)
     min_length    discard contour pieces shorter than this
+    clip          optional shapely (Multi)Polygon; contours are cut to it (the TIN itself is
+                  already limited by its constraints, so this is for presentation only)
     """
     zmin, zmax = tin.z_range()
     lv = np.asarray(levels, dtype=np.float64) if levels is not None else levels_for(zmin, zmax, interval, base)
-    eps = max(1e-9, 1e-6 * interval)
-    z = tin.nodes[:, 2]
     out: list[ContourLine] = []
     for level in lv:
         lvl = float(level)
-        # Legacy nudged node elevations by 1.5 mm when they coincided with a level; here the
-        # level itself is shifted by a tiny epsilon so every triangle has 0 or 2 crossings.
-        guard = 0
-        while np.any(np.abs(z - lvl) < eps) and guard < 10:
-            lvl += eps
-            guard += 1
-        seg = _segments_for_level(tin, lvl)
+        seg = _level_segments(tin, lvl)
         if seg is None:
             continue
-        merged = linemerge(MultiLineString(list(seg)))
-        parts = list(merged.geoms) if isinstance(merged, MultiLineString) else [merged]
-        major = is_major_level(float(level), interval, major_every, base)
-        for g in parts:
-            if g.is_empty or g.length < min_length:
-                continue
-            c = np.asarray(g.coords, dtype=np.float64)[:, :2]
-            closed = bool(np.allclose(c[0], c[-1]))
-            c = _thin(c, min_spacing, closed)
-            if smoothing == "chaikin":
-                c = chaikin(c, smooth_iterations, closed)
-            out.append(ContourLine(level=float(level), is_major=major, coords=c, closed=closed))
+        major = is_major_level(lvl, interval, major_every, base)
+        for c, closed in _chain(*seg):
+            pieces = _clip_line(c, clip) if clip is not None else [c]
+            for pc in pieces:
+                if len(pc) < 2:
+                    continue
+                cl = closed and bool(np.allclose(pc[0], pc[-1]))
+                if float(np.hypot(*np.diff(pc, axis=0).T).sum()) < min_length:
+                    continue
+                pc = _thin(pc, min_spacing, cl)
+                if smoothing == "chaikin":
+                    pc = chaikin(pc, smooth_iterations, cl)
+                out.append(ContourLine(level=lvl, is_major=major, coords=pc, closed=cl))
     out.sort(key=lambda c: (c.level, -c.length))
     return out
 

@@ -99,7 +99,10 @@ def test_full_pipeline(client, tmp_path):
     assert job["status"] == "done", job
     run_id = job["result"]["id"]
     run = client.get(f"/api/projects/{pid}/tin/{run_id}").json()
-    assert run["stats"]["triangles_removed_by_boundary"] > 0 and run["stats"]["segments"] == 2
+    # 2 breakline segments + 4 boundary sides: the boundary is a constraint, not just a clip
+    assert run["stats"]["triangles_removed_by_boundary"] > 0 and run["stats"]["segments"] == 6
+    assert run["stats"]["constraints"] == {"boundary": 1, "hole": 0, "breakline": 1}
+    assert run["stats"]["validation_problems"] == 0
     assert client.get(f"/api/jobs/{job['id']}").json()["status"] == "done"
 
     # mesh binary
@@ -319,3 +322,87 @@ def test_auth_and_collaboration(tmp_path):
     # registration closed after toggling
     app.state.settings.open_registration = False
     assert TestClient(app).post("/api/auth/register", json={"username": "carol", "password": "secret789"}).status_code == 403
+
+
+def _gap_points_csv(seed=5) -> bytes:
+    """Random survey with a building gap and a notch cut out of the east side."""
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0, 200, 2500)
+    y = rng.uniform(0, 100, 2500)
+    building = (x > 80) & (x < 110) & (y > 40) & (y < 65)
+    notch = (x > 160) & (y > 30) & (y < 70)
+    keep = ~building & ~notch
+    x, y = x[keep], y[keep]
+    z = 100 + 0.1 * x + 0.05 * y
+    rows = ["PtNo,Easting,Northing,Elevation"] + [f"{i+1},{x[i]:.3f},{y[i]:.3f},{z[i]:.3f}" for i in range(len(x))]
+    return "\n".join(rows).encode()
+
+
+def test_constraint_workflow_semi_automatic(client):
+    pid = _make_project(client, "gaps")
+    _import(client, pid, "pts.csv", _gap_points_csv())
+
+    # detect: boundary + gap suggestions, nothing stored yet
+    r = client.post(f"/api/projects/{pid}/constraints/detect", json={"edge_factor": 3.0})
+    assert r.status_code == 200, r.text
+    sug = r.json()
+    kinds = [f["properties"]["kind"] for f in sug["features"]]
+    assert kinds.count("boundary") == 1 and "hole" in kinds
+    assert all("reason" in f["properties"] and 0 < f["properties"]["confidence"] <= 1 for f in sug["features"])
+    assert sug["stats"]["peeled_triangles"] > 0
+    assert client.get(f"/api/projects/{pid}/lines/summary").json() == []
+
+    # user reviews: accept everything
+    feats = [{"kind": f["properties"]["kind"], "coords": f["geometry"]["coordinates"], "name": f["properties"]["reason"]} for f in sug["features"]]
+    r = client.post(f"/api/projects/{pid}/constraints/accept", json={"features": feats})
+    assert r.status_code == 200 and r.json()["added"] == len(feats)
+    cons = client.get(f"/api/projects/{pid}/constraints", params={"source": "accepted"}).json()
+    assert len(cons["features"]) == len(feats)
+    assert {f["properties"]["kind"] for f in cons["features"]} == {"boundary", "void"}
+
+    # TIN in semi mode honours them; rejected triangles are available for display
+    r = client.post(f"/api/projects/{pid}/tin", json={"constraint_mode": "semi", "min_angle_deg": 5.0})
+    assert r.status_code == 202 and r.json()["status"] == "done", r.text
+    run_id = r.json()["result"]["id"]
+    run = client.get(f"/api/projects/{pid}/tin/{run_id}").json()
+    assert run["stats"]["constraints"]["boundary"] == 1 and run["stats"]["constraints"]["hole"] >= 1
+    assert run["stats"]["validation_problems"] == 0
+    rej = client.get(f"/api/projects/{pid}/tin/{run_id}/rejected.geojson").json()
+    assert rej["total"] > 0 and rej["counts"].get("hole", 0) > 0 and rej["counts"].get("outside_boundary", 0) > 0
+    assert rej["features"][0]["geometry"]["type"] == "Polygon" and rej["features"][0]["properties"]["reason"]
+    # inside the gap there is no surface; on the surveyed ground there is
+    assert client.get(f"/api/projects/{pid}/tin/{run_id}/elevation", params={"x": 95, "y": 52}).json()["inside"] is False
+    assert client.get(f"/api/projects/{pid}/tin/{run_id}/elevation", params={"x": 185, "y": 50}).json()["inside"] is False
+    assert client.get(f"/api/projects/{pid}/tin/{run_id}/elevation", params={"x": 50, "y": 50}).json()["inside"] is True
+    # contours come from the validated TIN only
+    r = client.post(f"/api/projects/{pid}/contours", json={"interval": 1.0})
+    assert r.json()["status"] == "done"
+
+
+def test_constraint_workflow_automatic(client):
+    pid = _make_project(client, "auto")
+    _import(client, pid, "pts.csv", _gap_points_csv(seed=9))
+    # automatic mode: detection runs inside the job and stores the constraints with source=auto
+    r = client.post(f"/api/projects/{pid}/tin", json={"constraint_mode": "auto", "max_edge_factor": 4.0})
+    assert r.status_code == 202 and r.json()["status"] == "done", r.text
+    run = client.get(f"/api/projects/{pid}/tin/{r.json()['result']['id']}").json()
+    assert run["stats"]["constraint_mode"] == "auto" and run["stats"]["detection"]["suggestions"] >= 2
+    auto = client.get(f"/api/projects/{pid}/constraints", params={"source": "auto"}).json()["features"]
+    assert sum(1 for f in auto if f["properties"]["kind"] == "boundary") == 1
+    # rebuilding replaces the automatic constraints instead of piling them up
+    client.post(f"/api/projects/{pid}/tin", json={"constraint_mode": "auto"})
+    auto2 = client.get(f"/api/projects/{pid}/constraints", params={"source": "auto"}).json()["features"]
+    assert len(auto2) == len(auto)
+    # a boundary drawn by the user switches detection off; the auto boundary is no longer used
+    r = client.post(f"/api/projects/{pid}/lines", json={"kind": "boundary", "coords": [[20, 20], [150, 20], [150, 80], [20, 80], [20, 20]]})
+    assert r.status_code == 200
+    r = client.post(f"/api/projects/{pid}/tin", json={"constraint_mode": "auto"})
+    run = client.get(f"/api/projects/{pid}/tin/{r.json()['result']['id']}").json()
+    assert "detection" not in run["stats"]
+    assert client.delete(f"/api/projects/{pid}/constraints/auto").json()["deleted"] >= 1
+    assert client.get(f"/api/projects/{pid}/constraints", params={"source": "auto"}).json()["features"] == []
+    # manual mode with the drawn boundary only
+    r = client.post(f"/api/projects/{pid}/tin", json={"constraint_mode": "manual"})
+    run = client.get(f"/api/projects/{pid}/tin/{r.json()['result']['id']}").json()
+    assert run["stats"]["constraints"] == {"boundary": 1, "hole": 0, "breakline": 0}
+    assert client.get(f"/api/projects/{pid}/tin/{run['id']}/elevation", params={"x": 10, "y": 10}).json()["inside"] is False

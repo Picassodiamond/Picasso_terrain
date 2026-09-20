@@ -66,6 +66,29 @@ def points_geojson(project_id: str, crs: str | None = Query(None), layer: str | 
         raise raise_service(e)
 
 
+@router.get("/points.bin")
+def points_bin(project_id: str, crs: str | None = Query(None), layer: str | None = None, p: dict = Depends(get_project),
+               store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+    """Compact binary positions + fids for the map (16 bytes per point)."""
+    from fastapi.responses import Response
+
+    try:
+        data = services.points_binary(store, p.get("crs"), crs, layers=[layer] if layer else None)
+    except ServiceError as e:
+        raise raise_service(e)
+    return Response(content=data, media_type="application/octet-stream")
+
+
+@router.get("/points/nearest")
+def nearest_point(project_id: str, x: float, y: float, radius: float = Query(5.0, gt=0), p: dict = Depends(get_project),
+                  store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+    """Closest survey point to (x, y) within radius metres (used for clicking in big point clouds)."""
+    r = store.nearest_point(x, y, radius)
+    if r is None:
+        raise HTTPException(status_code=404, detail="no point within radius")
+    return r
+
+
 @router.get("/points.csv")
 def points_csv(project_id: str, fmt: str = "id,x,y,z,remark", p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
     from fastapi.responses import PlainTextResponse
@@ -112,19 +135,21 @@ def lines_summary(project_id: str, p: dict = Depends(get_project), store: Projec
 @router.patch("/lines/{fid}")
 def update_line(project_id: str, fid: int, kind: str | None = None, layer: str | None = None, name: str | None = None,
                 p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_editor)):
-    if kind is not None and kind not in ("feature", "boundary", "void", "contour"):
-        raise HTTPException(status_code=400, detail="kind must be feature|boundary|void|contour")
+    if kind is not None:
+        kind = {"hole": "void", "breakline": "feature"}.get(kind, kind)
+        if kind not in ("feature", "boundary", "void", "contour"):
+            raise HTTPException(status_code=400, detail="kind must be feature|boundary|void|contour (or hole/breakline)")
     store.update_line(fid, kind=kind, layer=layer, name=name)
     return {"ok": True}
 
 
 @router.delete("/lines")
-def delete_lines(project_id: str, fids: str | None = Query(None), kind: str | None = None, all: bool = Query(False),
+def delete_lines(project_id: str, fids: str | None = Query(None), kind: str | None = None, source: str | None = None, all: bool = Query(False),
                  p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), db: AppDB = Depends(get_db), _: dict = Depends(require_editor)):
     if fids:
         n = store.delete_lines(fids=[int(x) for x in fids.split(",") if x.strip()])
-    elif kind:
-        n = store.delete_lines(kind=kind)
+    elif kind or source:
+        n = store.delete_lines(kind=kind, source=source)
     elif all:
         n = store.delete_lines()
     else:
@@ -139,12 +164,22 @@ def add_line(project_id: str, body: dict, p: dict = Depends(get_project), store:
     """Add a feature/boundary/void line drawn in the browser: {kind, layer, name, coords: [[x,y,z],...]}."""
     import numpy as np
 
-    kind = body.get("kind", "feature")
+    kind = {"hole": "void", "breakline": "feature"}.get(body.get("kind", "feature"), body.get("kind", "feature"))
     if kind not in ("feature", "boundary", "void", "contour"):
-        raise HTTPException(status_code=400, detail="kind must be feature|boundary|void|contour")
+        raise HTTPException(status_code=400, detail="kind must be feature|boundary|void|contour (or hole/breakline)")
     coords = np.asarray(body.get("coords") or [], float)
     if coords.ndim != 2 or len(coords) < 2:
         raise HTTPException(status_code=400, detail="coords must be a list of at least two [x,y(,z)]")
-    n = store.add_lines([coords], kind, layer=body.get("layer") or kind.capitalize(), source="drawn", names=[body.get("name", "")])
+    n = store.add_lines([coords], kind, layer=body.get("layer") or kind.capitalize(), source=str(body.get("source") or "drawn"),
+                        names=[body.get("name", "")])
     db.touch_project(project_id)
     return {"added": n, "summary": store.line_summary()}
+
+
+# declared last: '/points/{fid}' would otherwise swallow '/points/layers' and '/points/nearest'
+@router.get("/points/{fid}")
+def point_detail(project_id: str, fid: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+    r = store.point(fid)
+    if r is None:
+        raise HTTPException(status_code=404, detail="point not found")
+    return r

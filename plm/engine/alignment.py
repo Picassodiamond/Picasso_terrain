@@ -271,12 +271,12 @@ class HorizontalAlignment:
         els = self.elements
         if not els:
             raise ValueError("alignment has no elements")
-        if ch <= els[0].start_chainage:
-            return els[0]
-        for el in els:
-            if el.start_chainage - 1e-9 <= ch <= el.end_chainage + 1e-9:
-                return el
-        return els[-1]
+        starts = getattr(self, "_starts", None)
+        if starts is None or len(starts) != len(els):
+            starts = self._starts = np.array([e.start_chainage for e in els])
+        # binary search; a chainage exactly on a junction belongs to the earlier element (legacy rule)
+        i = int(np.searchsorted(starts, ch - 1e-9, side="right")) - 1
+        return els[min(max(i, 0), len(els) - 1)]
 
     def point_and_direction(self, ch: float) -> tuple[float, float, float]:
         """(x, y, direction) at a chainage; extrapolates along the end tangents."""

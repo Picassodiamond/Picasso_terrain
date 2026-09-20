@@ -1,6 +1,6 @@
 /** Project workspace: top bar, side panels, Cesium map, charts pane, polling. */
 import * as Cesium from "cesium";
-import { api, type Alignment, type Comment, type Project, type SectionSet } from "../api";
+import { api, ApiError, type Alignment, type Comment, type Project, type SectionSet } from "../api";
 import { renderProfile } from "../charts/profile";
 import { renderSection } from "../charts/section";
 import { alignmentGeoJSON } from "../geom/alignment";
@@ -19,8 +19,11 @@ import { renderSettingsPanel } from "./panels/settings";
 import { renderTeamPanel } from "./panels/team";
 import { renderTinPanel } from "./panels/tin";
 import { LayerTree } from "./layerTree";
+import { renderModuleSwitcher } from "./moduleSwitcher";
+import { MODULES, designHash } from "../modules/registry";
 
 type Tab = "data" | "tin" | "contours" | "alignment" | "sections" | "export" | "team" | "settings";
+export type HeightMode = "ground" | "true";
 const TABS: { key: Tab; label: string }[] = [
   { key: "data", label: "Data" }, { key: "tin", label: "TIN" }, { key: "contours", label: "Contours" }, { key: "alignment", label: "Alignment" },
   { key: "sections", label: "Sections" }, { key: "export", label: "Export" }, { key: "team", label: "Team" }, { key: "settings", label: "Settings" },
@@ -39,6 +42,7 @@ export class Workspace {
   private activeTab: Tab = "data";
   private statusCoords!: HTMLElement;
   private statusInfo!: HTMLElement;
+  private switcherHost!: HTMLElement;
   private toolHint!: HTMLElement;
   private busyEl!: HTMLElement;
   private chartsEl!: HTMLElement;
@@ -50,7 +54,11 @@ export class Workspace {
   private pollTimer: number | null = null;
   private lastActivityId = 0;
   private profileCursor: ((ch: number | null) => void) | null = null;
-  private tinVertices: { xyz: Float64Array; grid: Map<string, number[]>; cell: number } | null = null;
+  /** nearest-vertex ground lookup: origin-relative float32 positions + a counting-sort grid (typed arrays) */
+  private tinVertices: { ox: number; oy: number; oz: number; xyz: Float32Array; x0: number; y0: number; cell: number; nx: number; ny: number; offsets: Int32Array; ids: Int32Array } | null = null;
+  private tinIndexParts: { origin: [number, number, number]; f: Float32Array }[] = [];
+  /** meshes bigger than this are fetched as tiles and drawn progressively */
+  static TILE_THRESHOLD = 300_000;
   layerTree!: LayerTree;
   comments: Comment[] = [];
   currentSectionSetData: SectionSet | null = null;
@@ -64,7 +72,43 @@ export class Workspace {
     const b = project.summary?.bounds;
     const anchor = (project.settings as any)?.anchor ?? null;
     this.frame = new Frame(project.crs_info, b ? [b[0], b[1]] : undefined, anchor && Number.isFinite(anchor.lon) ? anchor : null);
+    this.heightMode = ((project.settings as any)?.height_mode as HeightMode) || "ground";
+    this.applyHeightMode();
     store.set("project", project);
+  }
+
+  // ------------------------------------------------------------------ height mode
+  /** "ground": the lowest survey point rests on the base map (display only, RLs are unchanged);
+   *  "true": real heights above the ellipsoid - the terrain floats above the flat imagery. */
+  heightMode: HeightMode = "ground";
+
+  /** Recompute the frame's display offset from the current mode and data. Returns true when it changed. */
+  applyHeightMode(): boolean {
+    const zmin = this.project.summary?.z_range?.[0];
+    const want = this.heightMode === "ground" && this.frame.georeferenced && zmin != null && Number.isFinite(zmin) ? -zmin : 0;
+    if (want === this.frame.heightOffset) return false;
+    this.frame.heightOffset = want;
+    return true;
+  }
+
+  async setHeightMode(mode: HeightMode, persist = true): Promise<void> {
+    this.heightMode = mode;
+    if (this.applyHeightMode()) await this.redrawAll();
+    if (persist) api.projects.update(this.project.id, { settings: { height_mode: mode } }).catch(() => { /* viewers without edit rights keep the choice for this session only */ });
+  }
+
+  /** Re-place every layer after the frame changed (heights/offset), then re-frame the camera. */
+  async redrawAll(): Promise<void> {
+    if (!this.layers) return;
+    const buf = await api.data.pointsBin(this.project.id);
+    const n = this.project.summary?.points ?? 0;
+    const labels = store.get("layers").pointLabels && n <= 20_000 ? await api.data.points(this.project.id, undefined, 20_000) : null;
+    this.layers.setPointsBinary(buf, labels);
+    await this.selectRun(store.get("currentRun")); // TIN + lines, alignment, comments
+    await this.redrawContours();
+    await this.loadSectionSet();
+    this.layers.setVisibility(store.get("layers"));
+    this.zoomToData();
   }
 
   // ------------------------------------------------------------------ layout
@@ -83,13 +127,23 @@ export class Workspace {
     } }, "Base map?");
     const modeSel = select([{ value: "3D", label: "3D" }, { value: "2D", label: "2D" }, { value: "2.5D", label: "2.5D" }], "3D");
     modeSel.addEventListener("change", () => this.mv.setSceneMode(modeSel.value as any));
+    const heightSel = select(
+      [{ value: "ground", label: "On base map" }, { value: "true", label: "True elevation" }],
+      geo ? this.heightMode : "true",
+      { title: geo
+        ? "On base map: the lowest survey point is drawn at the base map level so the terrain sits on the imagery (display only; RLs, contours and sections keep their real values). True elevation: real heights above the ellipsoid - the terrain floats above the flat map."
+        : "Height placement applies to georeferenced projects" });
+    if (!geo) heightSel.disabled = true;
+    heightSel.addEventListener("change", () => void this.setHeightMode(heightSel.value as HeightMode));
     const chartsBtn = button("Charts", () => this.toggleCharts(), "btn small");
     const top = el("header", { class: "topbar" },
       el("div", { class: "brand", onClick: () => this.onClose(), style: "cursor:pointer", title: "All projects" }, el("span", { style: "color:var(--accent)" }, "▲"), "Picasso LandMesh"),
       el("span", { class: "project-name" }, "project ", el("b", {}, this.project.name), el("span", { class: "badge" }, this.project.crs_info?.is_local ? "local grid" : this.project.crs_info?.name || this.project.crs)),
+      (this.switcherHost = el("span", { class: "switcher-host" })),
       el("span", { class: "spacer" }),
       el("span", { class: "muted" }, "Base map"), baseSel, baseHint,
       el("span", { class: "muted" }, "View"), modeSel,
+      el("span", { class: "muted" }, "Height"), heightSel,
       button("Zoom to data", () => this.zoomToData(), "btn small"),
       button("Top", () => this.mv.lookDown(), "btn small"),
       chartsBtn,
@@ -134,6 +188,7 @@ export class Workspace {
     this.setupSplitter(splitter);
     const main = el("div", { class: "main" }, mapWrap, this.chartsEl);
     this.root.appendChild(el("div", { class: "app" }, top, el("div", { class: "workspace" }, sidebar, main)));
+    void this.refreshDesigns();
 
     // map
     this.mv = new MapViewer(cesiumDiv, this.frame);
@@ -211,11 +266,17 @@ export class Workspace {
   }
 
   private defaultClick(p: { x: number; y: number; z: number }, picked: PickId | null): void {
-    if (picked?.type === "point") toast(`Point ${picked.id || picked.fid}: RL ${fmt(picked.z)} ${picked.remark ? "· " + picked.remark : ""}`);
-    else if (picked?.type === "section") { store.set("currentSectionIndex", picked.index); this.showCharts(true); }
+    const show = (d: { fid: number; id?: string; z: number; remark?: string }) => toast(`Point ${d.id || d.fid}: RL ${fmt(d.z)} ${d.remark ? "· " + d.remark : ""}`);
+    if (picked?.type === "point") {
+      const pk = picked;
+      void api.data.point(this.project.id, pk.fid).then(show).catch(() => show(pk));
+    } else if (picked?.type === "section") { store.set("currentSectionIndex", picked.index); this.showCharts(true); }
     else if (picked?.type === "comment") { this.showTab("team"); }
     else if (picked?.type === "ip") { this.showTab("alignment"); }
-    void p;
+    else if (!picked && this.layers.pointsBig && store.get("layers").points) {
+      // big point clouds are not pickable: ask the server for the closest point instead
+      void api.data.nearest(this.project.id, p.x, p.y, 3).then(show).catch(() => { /* nothing close */ });
+    }
   }
 
   // ------------------------------------------------------------------ data loading
@@ -239,13 +300,18 @@ export class Workspace {
     if (b && this.frame.kind === "local" && this.frame.originX === 0 && this.frame.originY === 0) {
       this.frame.setOrigin(b[0], b[1]);
     }
+    // the lowest point may have changed (first import, deletions): keep the terrain on the base map
+    if (this.applyHeightMode()) void this.redrawAll();
     this.updateStatus();
   }
 
   async refreshPoints(): Promise<void> {
     await this.refreshProject();
-    const fc = await api.data.points(this.project.id);
-    this.layers.setPoints(fc, store.get("layers").pointLabels);
+    const buf = await api.data.pointsBin(this.project.id);
+    // labels need ids / remarks: fetch them as GeoJSON, but only for modest point counts
+    const n = this.project.summary?.points ?? 0;
+    const labels = store.get("layers").pointLabels && n <= 20_000 ? await api.data.points(this.project.id, undefined, 20_000) : null;
+    this.layers.setPointsBinary(buf, labels);
     this.layers.setVisibility(store.get("layers"));
   }
 
@@ -270,13 +336,12 @@ export class Workspace {
     if (run === null) { this.layers.setTin(null, store.get("tinStyle")); this.tinVertices = null; return; }
     store.set("busy", "Loading TIN");
     try {
-      const buf = await api.tin.mesh(this.project.id, run);
-      this.indexTin(buf);
-      this.layers.setTin(buf, store.get("tinStyle"));
       const r = store.get("tinRuns").find((x) => x.id === run);
       const zr = r?.z_range ?? [0, 0];
+      const zro = zr[0] != null && zr[1] != null ? ([zr[0], zr[1]] as [number, number]) : undefined;
+      await this.loadTinMesh(run, r?.n_triangles ?? 0, zro);
       const b = r?.bounds;
-      this.mv.setPickTarget(this.layers.tin, ((zr[0] ?? 0) + (zr[1] ?? 0)) / 2, b && b[0] != null ? [((b[0] ?? 0) + (b[2] ?? 0)) / 2, ((b[1] ?? 0) + (b[3] ?? 0)) / 2] : null);
+      this.mv.setPickTarget(this.layers.tinParts, ((zr[0] ?? 0) + (zr[1] ?? 0)) / 2, b && b[0] != null ? [((b[0] ?? 0) + (b[2] ?? 0)) / 2, ((b[1] ?? 0) + (b[3] ?? 0)) / 2] : null);
     } finally {
       store.set("busy", null);
     }
@@ -292,48 +357,115 @@ export class Workspace {
 
   restyleTin(): void {
     const run = store.get("currentRun");
-    if (run === null) return;
-    void api.tin.mesh(this.project.id, run).then((buf) => {
-      this.layers.setTin(buf, store.get("tinStyle"));
-      const r = store.get("tinRuns").find((x) => x.id === run);
-      const zr = r?.z_range ?? [0, 0];
-      this.mv.setPickTarget(this.layers.tin, ((zr[0] ?? 0) + (zr[1] ?? 0)) / 2, null);
-    });
+    if (run !== null) void this.selectRun(run);
   }
 
-  private indexTin(buf: ArrayBuffer): void {
+  /** Fetch and draw the surface: one mesh.bin for ordinary sizes, tiles (3 in flight, nearest the
+   *  centre first) above TILE_THRESHOLD triangles so a big mesh appears progressively and Cesium
+   *  can cull tiles outside the view. */
+  private async loadTinMesh(run: number, nTriangles: number, zRange?: [number, number]): Promise<void> {
+    const style = store.get("tinStyle");
+    this.layers.clearTin();
+    this.tinIndexParts = [];
+    this.tinVertices = null;
+    if (nTriangles <= Workspace.TILE_THRESHOLD) {
+      const buf = await api.tin.mesh(this.project.id, run);
+      this.layers.addTinPart(buf, style, zRange);
+      this.addTinIndexPart(buf);
+    } else {
+      const idx = await api.tin.tiles(this.project.id, run);
+      const cx = (idx.bounds[0] + idx.bounds[2]) / 2, cy = (idx.bounds[1] + idx.bounds[3]) / 2;
+      const dist = (t: { bounds: number[] }) => ((t.bounds[0] + t.bounds[2]) / 2 - cx) ** 2 + ((t.bounds[1] + t.bounds[3]) / 2 - cy) ** 2;
+      const queue = [...idx.tiles].sort((a, b) => dist(a) - dist(b));
+      const total = queue.length;
+      const zr = zRange ?? (idx.z_range as [number, number]);
+      let done = 0;
+      const worker = async () => {
+        for (let t = queue.shift(); t; t = queue.shift()) {
+          const buf = await api.tin.tileMesh(this.project.id, run, t.i, t.j);
+          if (store.get("currentRun") !== run) return; // user switched runs meanwhile
+          this.layers.addTinPart(buf, style, zr);
+          this.addTinIndexPart(buf);
+          store.set("busy", `Loading TIN ${++done}/${total} tiles`);
+        }
+      };
+      await Promise.all([worker(), worker(), worker()]);
+    }
+    this.finishTinIndex();
+  }
+
+  private addTinIndexPart(buf: ArrayBuffer): void {
     const dv = new DataView(buf);
     const n = dv.getUint32(8, true), dtype = dv.getUint32(16, true);
-    const ox = dv.getFloat64(20, true), oy = dv.getFloat64(28, true), oz = dv.getFloat64(36, true);
-    const xyz = new Float64Array(n * 3);
-    if (dtype === 0) { const f = new Float32Array(buf, 44, n * 3); for (let i = 0; i < n; i++) { xyz[i * 3] = f[i * 3] + ox; xyz[i * 3 + 1] = f[i * 3 + 1] + oy; xyz[i * 3 + 2] = f[i * 3 + 2] + oz; } }
-    else xyz.set(new Float64Array(buf.slice(44, 44 + n * 24)));
-    let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
-    for (let i = 0; i < n; i++) { minx = Math.min(minx, xyz[i * 3]); maxx = Math.max(maxx, xyz[i * 3]); miny = Math.min(miny, xyz[i * 3 + 1]); maxy = Math.max(maxy, xyz[i * 3 + 1]); }
-    const cell = Math.max(1, Math.sqrt(((maxx - minx) * (maxy - miny)) / Math.max(1, n)) * 3);
-    const grid = new Map<string, number[]>();
-    for (let i = 0; i < n; i++) {
-      const k = `${Math.floor(xyz[i * 3] / cell)},${Math.floor(xyz[i * 3 + 1] / cell)}`;
-      (grid.get(k) ?? grid.set(k, []).get(k)!).push(i);
+    const origin: [number, number, number] = [dv.getFloat64(20, true), dv.getFloat64(28, true), dv.getFloat64(36, true)];
+    if (dtype === 0) this.tinIndexParts.push({ origin, f: new Float32Array(buf.slice(44, 44 + n * 12)) });
+    else {
+      const d = new Float64Array(buf.slice(44, 44 + n * 24));
+      const o: [number, number, number] = [d[0], d[1], d[2]];
+      const f = new Float32Array(n * 3);
+      for (let i = 0; i < n * 3; i++) f[i] = d[i] - o[i % 3];
+      this.tinIndexParts.push({ origin: o, f });
     }
-    this.tinVertices = { xyz, grid, cell };
+  }
+
+  /** Build the nearest-vertex grid over all loaded parts (typed arrays only: ~20 bytes per vertex). */
+  private finishTinIndex(): void {
+    const parts = this.tinIndexParts;
+    const n = parts.reduce((s, p) => s + p.f.length / 3, 0);
+    if (!n) { this.tinVertices = null; return; }
+    const ox = Math.min(...parts.map((p) => p.origin[0])), oy = Math.min(...parts.map((p) => p.origin[1])), oz = Math.min(...parts.map((p) => p.origin[2]));
+    const xyz = new Float32Array(n * 3);
+    let k = 0;
+    let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+    for (const p of parts) {
+      const dx = p.origin[0] - ox, dy = p.origin[1] - oy, dz = p.origin[2] - oz;
+      for (let i = 0; i < p.f.length; i += 3) {
+        const x = p.f[i] + dx, y = p.f[i + 1] + dy;
+        xyz[k] = x; xyz[k + 1] = y; xyz[k + 2] = p.f[i + 2] + dz; k += 3;
+        if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y;
+      }
+    }
+    let cell = Math.max(1e-3, Math.sqrt(((maxx - minx) * (maxy - miny)) / n) * 3);
+    let nx = Math.floor((maxx - minx) / cell) + 1, ny = Math.floor((maxy - miny) / cell) + 1;
+    while (nx * ny > 4 * n + 16) { cell *= 1.5; nx = Math.floor((maxx - minx) / cell) + 1; ny = Math.floor((maxy - miny) / cell) + 1; }
+    const cellOf = new Int32Array(n);
+    const counts = new Int32Array(nx * ny + 1);
+    for (let i = 0; i < n; i++) {
+      const c = Math.floor((xyz[i * 3 + 1] - miny) / cell) * nx + Math.floor((xyz[i * 3] - minx) / cell);
+      cellOf[i] = c; counts[c + 1]++;
+    }
+    for (let c = 0; c < nx * ny; c++) counts[c + 1] += counts[c];
+    const offsets = counts;
+    const fill = new Int32Array(nx * ny);
+    const ids = new Int32Array(n);
+    for (let i = 0; i < n; i++) { const c = cellOf[i]; ids[offsets[c] + fill[c]++] = i; }
+    this.tinVertices = { ox, oy, oz, xyz, x0: minx, y0: miny, cell, nx, ny, offsets, ids };
+    this.tinIndexParts = [];
   }
 
   /** Approximate ground elevation (nearest TIN vertex) for placing labels/markers. */
   zAt = (x: number, y: number): number => {
     const t = this.tinVertices;
     if (!t) return 0;
-    const cx = Math.floor(x / t.cell), cy = Math.floor(y / t.cell);
+    const rx = x - t.ox, ry = y - t.oy;
+    const cx = Math.floor((rx - t.x0) / t.cell), cy = Math.floor((ry - t.y0) / t.cell);
     let best = Infinity, bz = 0;
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-      const ids = t.grid.get(`${cx + dx},${cy + dy}`);
-      if (!ids) continue;
-      for (const i of ids) { const d = (t.xyz[i * 3] - x) ** 2 + (t.xyz[i * 3 + 1] - y) ** 2; if (d < best) { best = d; bz = t.xyz[i * 3 + 2]; } }
+    const scan = (ci: number, cj: number) => {
+      if (ci < 0 || cj < 0 || ci >= t.nx || cj >= t.ny) return;
+      const c = cj * t.nx + ci;
+      for (let k = t.offsets[c]; k < t.offsets[c + 1]; k++) {
+        const i = t.ids[k];
+        const d = (t.xyz[i * 3] - rx) ** 2 + (t.xyz[i * 3 + 1] - ry) ** 2;
+        if (d < best) { best = d; bz = t.xyz[i * 3 + 2]; }
+      }
+    };
+    // grow rings outwards until something is found (points far outside the TIN take a few rings)
+    for (let r = 0; r <= Math.max(t.nx, t.ny) && best === Infinity; r++) {
+      for (let dx = -r; dx <= r; dx++) { scan(cx + dx, cy - r); if (r) scan(cx + dx, cy + r); }
+      for (let dy = -r + 1; dy < r; dy++) { scan(cx - r, cy + dy); scan(cx + r, cy + dy); }
+      if (best < Infinity && r === 0) { scan(cx - 1, cy - 1); scan(cx, cy - 1); scan(cx + 1, cy - 1); scan(cx - 1, cy); scan(cx + 1, cy); scan(cx - 1, cy + 1); scan(cx, cy + 1); scan(cx + 1, cy + 1); }
     }
-    if (best === Infinity) { // fall back to any vertex
-      for (let i = 0; i < t.xyz.length / 3; i++) { const d = (t.xyz[i * 3] - x) ** 2 + (t.xyz[i * 3 + 1] - y) ** 2; if (d < best) { best = d; bz = t.xyz[i * 3 + 2]; } }
-    }
-    return bz;
+    return best === Infinity ? 0 : t.oz + bz;
   };
 
   async refreshContours(): Promise<void> {
@@ -440,6 +572,34 @@ export class Workspace {
       renderSection(this.sectionEl, sec, { vScale: this.vScale, onHover: (p) => store.emit("hover:chainage", p ? { x: p.x, y: p.y, z: p.z } : null) });
       this.profileCursor?.(sec.chainage);
     }
+  }
+
+  // ------------------------------------------------------------------ design modules (hand-off)
+  async refreshDesigns(): Promise<void> {
+    try {
+      const designs = await api.designs.list(this.project.id);
+      this.switcherHost.replaceChildren(renderModuleSwitcher(this.project.id, designs, "terrain", (mid) => void this.createDesign(mid)));
+    } catch { /* older server without designs */ }
+  }
+
+  /** Create a design workspace pinned to the current TIN run (optionally seeded with an alignment) and switch to it. */
+  async createDesign(moduleId: string, alignmentId: number | null = store.get("currentAlignment"), suggestedName?: string): Promise<void> {
+    const run = store.get("currentRun");
+    if (run === null) { toast("Build a TIN first - a design is pinned to a terrain snapshot", "error"); this.showTab("tin"); return; }
+    const m = MODULES.find((x) => x.id === moduleId);
+    const al = store.get("alignments").find((a) => a.id === alignmentId);
+    const name = prompt(`Name for the new ${m?.label ?? moduleId}`, suggestedName ?? (al ? `${al.name} design` : `${m?.label ?? moduleId} 1`));
+    if (name === null) return;
+    try {
+      const d = await api.designs.create(this.project.id, { module: moduleId, name, tin_run_id: run, alignment_id: alignmentId ?? null });
+      toast(`${m?.label ?? moduleId} "${d.name}" created on TIN run ${run}`, "ok");
+      location.hash = designHash(this.project.id, d);
+    } catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); }
+  }
+
+  openInRoadDesign(alignmentId: number): void {
+    const al = store.get("alignments").find((a) => a.id === alignmentId);
+    void this.createDesign("road", alignmentId, al ? `${al.name} road design` : undefined);
   }
 
   // ------------------------------------------------------------------ misc

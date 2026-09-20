@@ -56,6 +56,7 @@ export async function renderProjects(root: HTMLElement, onOpen: (p: Project) => 
       el("h3", {}, p.name),
       el("div", { class: "meta" }, p.crs_info?.name || p.crs),
       el("div", { class: "meta" }, `${s?.points ?? 0} points · ${s?.tin_runs ?? 0} TIN · ${s?.contour_sets ?? 0} contour sets · ${s?.alignments ?? 0} alignments`),
+      Object.keys(s?.designs || {}).length ? el("div", { class: "meta" }, Object.entries(s!.designs!).map(([m, n]) => `${n} ${m} design${n > 1 ? "s" : ""}`).join(" · ")) : null,
       el("div", { class: "meta" }, `updated ${new Date(p.updated).toLocaleString()}`),
       p.description ? el("div", { class: "meta", style: "margin-top:6px" }, p.description) : null,
     ));

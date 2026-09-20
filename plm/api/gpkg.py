@@ -156,6 +156,7 @@ class ProjectStore:
         with st._connect() as c:
             r = c.execute("SELECT srs_id FROM gpkg_geometry_columns WHERE table_name='points'").fetchone()
             st.srs_id = int(r[0]) if r else -1
+            st._migrate(c)
         return st
 
     def _connect(self) -> sqlite3.Connection:
@@ -230,24 +231,67 @@ class ProjectStore:
             self._bump_extent(c, "points", ps.x, ps.y)
         return len(rows)
 
+    @staticmethod
+    def _layer_filter(layers: Iterable[str] | None) -> tuple[str, list[Any]]:
+        if not layers:
+            return "", []
+        lays = list(layers)
+        return f" WHERE layer IN ({','.join('?' * len(lays))})", lays
+
     def points(self, layers: Iterable[str] | None = None, with_fid: bool = False) -> PointSet | tuple[PointSet, np.ndarray]:
-        q = "SELECT fid, pt_no, x, y, z, remark, layer FROM points"
-        vals: list[Any] = []
-        if layers:
-            lays = list(layers)
-            q += f" WHERE layer IN ({','.join('?' * len(lays))})"
-            vals = lays
-        q += " ORDER BY fid"
+        """Full PointSet with ids / remarks / layers (one Python string per attribute per point)."""
+        where, vals = self._layer_filter(layers)
+        q = "SELECT fid, pt_no, x, y, z, remark, layer FROM points" + where + " ORDER BY fid"
         with self._connect() as c:
+            c.row_factory = None  # plain tuples: about 3x cheaper than sqlite3.Row for bulk reads
             rows = c.execute(q, vals).fetchall()
         if not rows:
             ps = PointSet.empty()
             return (ps, np.zeros(0, int)) if with_fid else ps
-        arr = np.array([[r["x"], r["y"], r["z"]] for r in rows], dtype=float)
-        ps = PointSet(arr, [r["pt_no"] or "" for r in rows], [r["remark"] or "" for r in rows], [r["layer"] or "" for r in rows])
+        arr = np.array([r[2:5] for r in rows], dtype=float)
+        ps = PointSet(arr, [r[1] or "" for r in rows], [r[5] or "" for r in rows], [r[6] or "" for r in rows])
         if with_fid:
-            return ps, np.array([r["fid"] for r in rows], dtype=int)
+            return ps, np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows))
         return ps
+
+    def points_xyz(self, layers: Iterable[str] | None = None) -> tuple[np.ndarray, np.ndarray]:
+        """(fids (n,), xyz (n, 3)) straight into numpy - what the TIN, detection and the binary
+        points layer need; no per-point strings are created."""
+        where, vals = self._layer_filter(layers)
+        q = "SELECT fid, x, y, z FROM points" + where + " ORDER BY fid"
+        with self._connect() as c:
+            c.row_factory = None
+            rows = c.execute(q, vals).fetchall()
+        if not rows:
+            return np.zeros(0, dtype=np.int64), np.zeros((0, 3))
+        arr = np.array(rows, dtype=np.float64)
+        return arr[:, 0].astype(np.int64), np.ascontiguousarray(arr[:, 1:])
+
+    def point(self, fid: int) -> dict | None:
+        with self._connect() as c:
+            r = c.execute("SELECT fid, pt_no, x, y, z, remark, layer, source FROM points WHERE fid=?", (fid,)).fetchone()
+        if not r:
+            return None
+        return {"fid": int(r["fid"]), "id": r["pt_no"] or "", "x": float(r["x"]), "y": float(r["y"]), "z": float(r["z"]),
+                "remark": r["remark"] or "", "layer": r["layer"] or "", "source": r["source"] or ""}
+
+    def nearest_point(self, x: float, y: float, radius: float) -> dict | None:
+        """Closest survey point within `radius` metres of (x, y), or None."""
+        with self._connect() as c:
+            c.row_factory = None
+            rows = c.execute("SELECT fid, x, y FROM points WHERE x BETWEEN ? AND ? AND y BETWEEN ? AND ?",
+                             (x - radius, x + radius, y - radius, y + radius)).fetchall()
+        if not rows:
+            return None
+        arr = np.array(rows, dtype=np.float64)
+        d = np.hypot(arr[:, 1] - x, arr[:, 2] - y)
+        k = int(np.argmin(d))
+        if d[k] > radius:
+            return None
+        out = self.point(int(arr[k, 0]))
+        if out is not None:
+            out["distance"] = float(d[k])
+        return out
 
     def point_layers(self) -> list[dict]:
         with self._connect() as c:
@@ -300,7 +344,7 @@ class ProjectStore:
         return len(rows)
 
     def lines(self, kind: str | None = None, layers: Iterable[str] | None = None) -> list[dict]:
-        q = "SELECT fid, geom, kind, layer, name, closed, n_vertices FROM lines"
+        q = "SELECT fid, geom, kind, layer, name, closed, n_vertices, source FROM lines"
         cond, vals = [], []
         if kind:
             cond.append("kind=?")
@@ -318,20 +362,24 @@ class ProjectStore:
                 g = from_gpkg_blob(r["geom"])
                 coords = shapely.get_coordinates(g, include_z=True)
                 out.append({"fid": r["fid"], "coords": coords, "kind": r["kind"], "layer": r["layer"] or "",
-                            "name": r["name"] or "", "closed": bool(r["closed"])})
+                            "name": r["name"] or "", "closed": bool(r["closed"]), "source": r["source"] or ""})
         return out
 
     def line_summary(self) -> list[dict]:
         with self._connect() as c:
             return [dict(r) for r in c.execute("SELECT kind, layer, COUNT(*) AS n, SUM(n_vertices) AS vertices FROM lines GROUP BY kind, layer ORDER BY kind, layer")]
 
-    def delete_lines(self, fids: Iterable[int] | None = None, kind: str | None = None) -> int:
+    def delete_lines(self, fids: Iterable[int] | None = None, kind: str | None = None, source: str | None = None) -> int:
         with self._connect() as c:
             if fids is not None:
                 ids = list(fids)
                 n = c.execute(f"DELETE FROM lines WHERE fid IN ({','.join('?' * len(ids))})", ids).rowcount if ids else 0
+            elif kind and source:
+                n = c.execute("DELETE FROM lines WHERE kind=? AND source=?", (kind, source)).rowcount
             elif kind:
                 n = c.execute("DELETE FROM lines WHERE kind=?", (kind,)).rowcount
+            elif source:
+                n = c.execute("DELETE FROM lines WHERE source=?", (source,)).rowcount
             else:
                 n = c.execute("DELETE FROM lines").rowcount
         return int(n)
@@ -349,20 +397,104 @@ class ProjectStore:
 
     # ------------------------------------------------------------------ TIN runs
     def save_tin(self, tin: TIN, params: dict, stats: dict, issues: Sequence[TinIssue] = (),
-                 node_source: np.ndarray | None = None, name: str = "") -> int:
+                 node_source: np.ndarray | None = None, name: str = "", rejected=None) -> int:
         nodes = np.ascontiguousarray(tin.nodes, dtype=np.float64).tobytes()
         tris = np.ascontiguousarray(tin.triangles, dtype=np.int32).tobytes()
         src = np.ascontiguousarray(node_source, dtype=np.int8).tobytes() if node_source is not None else None
         iss = json.dumps([{"kind": i.kind, "x": i.x, "y": i.y, "message": i.message} for i in issues])
+        rej = None
+        if rejected is not None and len(rejected):
+            # uint32 count, float64 xyz (r,3,3), int8 reason (r,)
+            rej = (struct.pack("<I", len(rejected)) + np.ascontiguousarray(rejected.xyz, dtype=np.float64).tobytes()
+                   + np.ascontiguousarray(rejected.reason, dtype=np.int8).tobytes())
         zmin, zmax = tin.z_range()
         b = tin.bounds()
         with self._connect() as c:
+            self._migrate(c)
             cur = c.execute(
-                "INSERT INTO tin_runs(created, name, params, stats, n_nodes, n_triangles, nodes, triangles, node_source, issues, min_x, min_y, max_x, max_y, min_z, max_z) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO tin_runs(created, name, params, stats, n_nodes, n_triangles, nodes, triangles, node_source, issues, min_x, min_y, max_x, max_y, min_z, max_z, rejected) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (_now(), name, json.dumps(params), json.dumps(stats), tin.n_nodes, tin.n_triangles, nodes, tris, src, iss,
-                 b[0], b[1], b[2], b[3], zmin, zmax),
+                 b[0], b[1], b[2], b[3], zmin, zmax, rej),
             )
             return int(cur.lastrowid)
+
+    def load_rejected(self, run_id: int) -> tuple[np.ndarray, np.ndarray]:
+        """Rejected triangles of a run: (xyz (r,3,3), reason (r,) int8); empty when none were kept."""
+        with self._connect() as c:
+            self._migrate(c)
+            r = c.execute("SELECT rejected FROM tin_runs WHERE id=?", (run_id,)).fetchone()
+        if not r:
+            raise KeyError(f"tin run {run_id} not found")
+        blob = r["rejected"]
+        if not blob:
+            return np.zeros((0, 3, 3)), np.zeros(0, dtype=np.int8)
+        n = struct.unpack("<I", blob[:4])[0]
+        xyz = np.frombuffer(blob[4:4 + n * 72], dtype=np.float64).reshape(n, 3, 3).copy()
+        reason = np.frombuffer(blob[4 + n * 72:4 + n * 72 + n], dtype=np.int8).copy()
+        return xyz, reason
+
+    def _migrate(self, c: sqlite3.Connection) -> None:
+        """Add columns / tables introduced after the first release to existing project files."""
+        cols = {r[1] for r in c.execute("PRAGMA table_info(tin_runs)")}
+        if "rejected" not in cols:
+            c.execute("ALTER TABLE tin_runs ADD COLUMN rejected BLOB")
+        # design workspaces (road / canal / building ...) pinned to an immutable TIN run
+        c.execute("""CREATE TABLE IF NOT EXISTS designs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, module TEXT NOT NULL, name TEXT DEFAULT '', tin_run_id INTEGER,
+            alignment_id INTEGER, settings TEXT DEFAULT '{}', status TEXT DEFAULT 'draft', created TEXT, updated TEXT)""")
+
+    # ------------------------------------------------------------------ designs
+    @staticmethod
+    def _design_row(r) -> dict:
+        d = dict(r)
+        d["settings"] = json.loads(d.get("settings") or "{}")
+        return d
+
+    def designs(self, module: str | None = None) -> list[dict]:
+        q = "SELECT * FROM designs" + (" WHERE module=?" if module else "") + " ORDER BY id"
+        with self._connect() as c:
+            self._migrate(c)
+            return [self._design_row(r) for r in c.execute(q, (module,) if module else ())]
+
+    def get_design(self, design_id: int) -> dict | None:
+        with self._connect() as c:
+            self._migrate(c)
+            r = c.execute("SELECT * FROM designs WHERE id=?", (design_id,)).fetchone()
+        return self._design_row(r) if r else None
+
+    def add_design(self, module: str, name: str, tin_run_id: int | None, alignment_id: int | None, settings: dict | None = None) -> int:
+        ts = _now()
+        with self._connect() as c:
+            self._migrate(c)
+            cur = c.execute("INSERT INTO designs(module, name, tin_run_id, alignment_id, settings, status, created, updated) VALUES (?,?,?,?,?,?,?,?)",
+                            (module, name, tin_run_id, alignment_id, json.dumps(settings or {}), "draft", ts, ts))
+            return int(cur.lastrowid)
+
+    def update_design(self, design_id: int, **fields) -> None:
+        sets, vals = [], []
+        for k in ("name", "tin_run_id", "alignment_id", "status"):
+            if k in fields and fields[k] is not None:
+                sets.append(f"{k}=?")
+                vals.append(fields[k])
+        if fields.get("settings") is not None:
+            sets.append("settings=?")
+            vals.append(json.dumps(fields["settings"]))
+        if not sets:
+            return
+        sets.append("updated=?")
+        vals.append(_now())
+        vals.append(design_id)
+        with self._connect() as c:
+            c.execute(f"UPDATE designs SET {', '.join(sets)} WHERE id=?", vals)
+
+    def delete_design(self, design_id: int) -> bool:
+        with self._connect() as c:
+            return c.execute("DELETE FROM designs WHERE id=?", (design_id,)).rowcount > 0
+
+    def design_counts(self) -> dict[str, int]:
+        with self._connect() as c:
+            self._migrate(c)
+            return {r[0]: int(r[1]) for r in c.execute("SELECT module, COUNT(*) FROM designs GROUP BY module")}
 
     def tin_runs(self) -> list[dict]:
         with self._connect() as c:
@@ -591,6 +723,8 @@ class ProjectStore:
         with self._connect() as c:
             n_pts = c.execute("SELECT COUNT(*) FROM points").fetchone()[0]
             lines = {r[0]: r[1] for r in c.execute("SELECT kind, COUNT(*) FROM lines GROUP BY kind")}
+            self._migrate(c)
+            designs = {r[0]: int(r[1]) for r in c.execute("SELECT module, COUNT(*) FROM designs GROUP BY module")}
             n_runs = c.execute("SELECT COUNT(*) FROM tin_runs").fetchone()[0]
             n_sets = c.execute("SELECT COUNT(*) FROM contour_sets").fetchone()[0]
             n_aln = c.execute("SELECT COUNT(*) FROM alignments").fetchone()[0]
@@ -599,7 +733,7 @@ class ProjectStore:
             zr = c.execute("SELECT MIN(z), MAX(z) FROM points").fetchone()
         return {
             "points": int(n_pts), "lines": lines, "tin_runs": int(n_runs), "contour_sets": int(n_sets),
-            "alignments": int(n_aln), "section_sets": int(n_sec),
+            "alignments": int(n_aln), "section_sets": int(n_sec), "designs": designs,
             "bounds": [ext[0], ext[1], ext[2], ext[3]] if ext and ext[0] is not None else None,
             "z_range": [zr[0], zr[1]] if zr and zr[0] is not None else None,
         }

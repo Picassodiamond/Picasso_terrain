@@ -26,6 +26,10 @@ export class Frame {
   private converter: proj4.Converter | null = null;
   originX = 0;
   originY = 0;
+  /** Display-only vertical shift (m) added to every height when placing geometry in the scene and
+   *  removed again when reading positions back. Used to rest the terrain on the flat base map
+   *  (the imagery sits at 0 m on the ellipsoid, real survey RLs would float kilometres above it). */
+  heightOffset = 0;
 
   constructor(info: CrsInfo | null | undefined, origin?: [number, number], anchor?: Anchor | null) {
     if (!info || info.is_local) {
@@ -53,12 +57,13 @@ export class Frame {
   }
 
   toCartesian(x: number, y: number, z = 0): Cesium.Cartesian3 {
+    const h = z + this.heightOffset;
     if (this.kind === "local") {
-      const local = new Cesium.Cartesian3(x - this.originX, y - this.originY, z);
+      const local = new Cesium.Cartesian3(x - this.originX, y - this.originY, h);
       return Cesium.Matrix4.multiplyByPoint(this.enu!, local, new Cesium.Cartesian3());
     }
     const [lon, lat] = this.converter!.forward([x, y]);
-    return Cesium.Cartesian3.fromDegrees(lon, lat, z);
+    return Cesium.Cartesian3.fromDegrees(lon, lat, h);
   }
 
   toCartesians(coords: ArrayLike<number>[] | number[][]): Cesium.Cartesian3[] {
@@ -70,11 +75,11 @@ export class Frame {
   fromCartesian(c: Cesium.Cartesian3): { x: number; y: number; z: number } {
     if (this.kind === "local") {
       const l = Cesium.Matrix4.multiplyByPoint(this.enuInv!, c, new Cesium.Cartesian3());
-      return { x: l.x + this.originX, y: l.y + this.originY, z: l.z };
+      return { x: l.x + this.originX, y: l.y + this.originY, z: l.z - this.heightOffset };
     }
     const carto = Cesium.Cartographic.fromCartesian(c);
     const [x, y] = this.converter!.inverse([Cesium.Math.toDegrees(carto.longitude), Cesium.Math.toDegrees(carto.latitude)]);
-    return { x, y, z: carto.height };
+    return { x, y, z: carto.height - this.heightOffset };
   }
 
   toLonLat(x: number, y: number): [number, number] | null {

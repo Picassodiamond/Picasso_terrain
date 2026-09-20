@@ -15,6 +15,7 @@ export class LayerTree {
   private open: Record<string, boolean> = { "Survey data": true, Terrain: true, Contours: true, Alignment: true, Sections: true, Team: false };
   private hullLoaded = false;
   private issuesLoaded = false;
+  private rejectedLoaded = false;
 
   constructor(private ws: Workspace, host: HTMLElement) {
     this.body = el("div", { class: "layer-body" });
@@ -57,6 +58,7 @@ export class LayerTree {
         { label: runInfo ? `TIN surface (run ${runInfo.id})` : "TIN surface", key: "tin", count: () => (runInfo ? `${runInfo.n_triangles} tri` : "none"), extra: () => this.tinStyleControls() },
         { label: "TIN outline", key: "tinHull", onToggle: (on) => void this.ensureHull(on) },
         { label: "Issue markers", key: "tinIssues", count: () => (runInfo ? `${runInfo.issues_count}` : null), onToggle: (on) => void this.ensureIssues(on) },
+        { label: "Rejected triangles", key: "tinRejected", count: () => (runInfo?.stats?.raw_triangles ? `${runInfo.stats.raw_triangles - runInfo.n_triangles}` : null), onToggle: (on) => void this.ensureRejected(on) },
       ] },
       { label: "Contours", children: [
         ...sets.map<Node>((s) => ({ label: s.name || `Set ${s.id} · ${s.params.interval} m`, count: () => `${s.n_lines}`,
@@ -116,13 +118,25 @@ export class LayerTree {
     this.ws.layers.setVisibility(store.get("layers"));
   }
 
-  /** call when the TIN run changes so outline/issues reload on next toggle */
+  private async ensureRejected(on: boolean): Promise<void> {
+    const run = store.get("currentRun");
+    if (on && run !== null && !this.rejectedLoaded) {
+      this.ws.layers.setRejected(await api.tin.rejected(this.ws.project.id, run));
+      this.rejectedLoaded = true;
+    }
+    this.ws.layers.setVisibility(store.get("layers"));
+  }
+
+  /** call when the TIN run changes so outline/issues/rejected reload on next toggle */
   invalidateTin(): void {
     this.hullLoaded = false;
     this.issuesLoaded = false;
+    this.rejectedLoaded = false;
+    this.ws.layers.setRejected(null);
     const v = store.get("layers");
     if (v.tinHull) void this.ensureHull(true);
     if (v.tinIssues) void this.ensureIssues(true);
+    if (v.tinRejected) void this.ensureRejected(true);
   }
 
   render(): void {

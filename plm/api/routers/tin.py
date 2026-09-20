@@ -19,7 +19,8 @@ router = APIRouter(prefix="/projects/{project_id}", tags=["tin"])
 def start_job(kind: str, params: dict, project_id: str, sync: bool, background: BackgroundTasks, db: AppDB, settings,
               user: dict | None = None) -> dict:
     job = db.create_job(project_id, kind, params)
-    keys = ("interval", "major_every", "left", "right", "alignment_id", "run_id", "boundary_mode")
+    keys = ("interval", "major_every", "left", "right", "alignment_id", "run_id", "boundary_mode", "constraint_mode",
+            "max_edge_length", "max_edge_factor", "min_angle_deg")
     db.log(project_id, user, f"{kind}_started", "job", job["id"], {k: v for k, v in params.items() if k in keys})
     if sync:
         out = execute_job(job["id"], settings, db) or job
@@ -60,7 +61,30 @@ def get_run(project_id: str, run_id: int, issues_limit: int = Query(500, ge=0), 
 def delete_run(project_id: str, run_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_editor)):
     if not store.delete_tin_run(run_id):
         raise HTTPException(status_code=404, detail="TIN run not found")
+    services.evict_tin(store.path, run_id)
     return None
+
+
+@router.get("/tin/{run_id}/tiles")
+def tiles(project_id: str, run_id: int, p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+    """Tile index of a big mesh: N x N grid, per-tile triangle counts and bounds. Fetch each tile
+    from /tin/{run_id}/tiles/{i}/{j}.bin (same format as mesh.bin)."""
+    try:
+        _, tin = services.load_tin(store, run_id)
+        return JSONResponse(services.tiles_public(services.tin_tiles(tin)))
+    except ServiceError as e:
+        raise raise_service(e)
+
+
+@router.get("/tin/{run_id}/tiles/{i}/{j}.bin")
+def tile_mesh(project_id: str, run_id: int, i: int, j: int, crs: str | None = None, p: dict = Depends(get_project),
+              store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+    try:
+        _, tin = services.load_tin(store, run_id)
+        data = services.tile_mesh_binary(tin, i, j, p.get("crs"), crs)
+    except ServiceError as e:
+        raise raise_service(e)
+    return Response(content=data, media_type="application/octet-stream", headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.get("/tin/{run_id}/mesh.bin")
@@ -107,6 +131,16 @@ def issues_geojson(project_id: str, run_id: int, crs: str | None = None, p: dict
             feats.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [float(x), float(y)]},
                           "properties": {"kind": i["kind"], "message": i["message"]}})
     return {"type": "FeatureCollection", "features": feats}
+
+
+@router.get("/tin/{run_id}/rejected.geojson")
+def rejected_geojson(project_id: str, run_id: int, crs: str | None = None, limit: int = Query(50000, ge=1, le=500000),
+                     p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(current_user)):
+    """Triangles removed from the raw triangulation (outside boundary, in holes, long edge, low quality)."""
+    try:
+        return JSONResponse(services.rejected_geojson(store, run_id, p.get("crs"), crs, limit))
+    except ServiceError as e:
+        raise raise_service(e)
 
 
 @router.get("/tin/{run_id}/elevation")

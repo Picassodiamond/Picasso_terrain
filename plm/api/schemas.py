@@ -54,6 +54,34 @@ class ProjectOut(BaseModel):
 
 
 # ---------------------------------------------------------------- import
+class DesignIn(BaseModel):
+    module: str
+    name: str = ""
+    tin_run_id: int | None = None  # default: latest run
+    alignment_id: int | None = None
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class DesignPatch(BaseModel):
+    name: str | None = None
+    tin_run_id: int | None = None
+    alignment_id: int | None = None
+    status: Literal["draft", "review", "approved", "archived"] | None = None
+    settings: dict[str, Any] | None = None
+
+
+class DesignOut(BaseModel):
+    id: int
+    module: str
+    name: str = ""
+    tin_run_id: int | None = None
+    alignment_id: int | None = None
+    settings: dict[str, Any] = Field(default_factory=dict)
+    status: str = "draft"
+    created: str
+    updated: str
+
+
 class ImportResult(BaseModel):
     filename: str
     format: str
@@ -61,6 +89,30 @@ class ImportResult(BaseModel):
     lines_added: dict[str, int] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
     summary: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------- constraints
+class DetectParams(BaseModel):
+    """Automatic constraint detection (data-limit boundary + gaps) from the survey points."""
+    edge_factor: float = Field(3.0, gt=1.0, description="long-edge threshold = factor x median Delaunay edge")
+    max_edge: float | None = Field(None, gt=0, description="absolute long-edge threshold in metres (overrides edge_factor)")
+    min_hole_area: float | None = Field(None, gt=0, description="smallest gap to report (default 8 x median triangle area)")
+    min_hole_triangles: int = Field(3, ge=1)
+    detect_holes: bool = True
+    point_layers: list[str] | None = None
+
+
+class ConstraintFeatureIn(BaseModel):
+    kind: Literal["boundary", "hole", "void", "breakline", "feature", "contour"]
+    coords: list[list[float]]
+    name: str = ""
+    layer: str | None = None
+
+
+class AcceptConstraintsIn(BaseModel):
+    features: list[ConstraintFeatureIn]
+    source: str = "accepted"
+    replace_auto: bool = Field(False, description="delete previously auto-detected constraints first")
 
 
 # ---------------------------------------------------------------- TIN
@@ -74,6 +126,15 @@ class TinParams(BaseModel):
     drop_zero_z: bool = False
     point_layers: list[str] | None = None
     feature_layers: list[str] | None = None
+    # constraint workflow: auto = detect boundary/gaps when the user has not supplied a boundary,
+    # semi = use the stored (reviewed) constraints, manual = stored constraints only
+    constraint_mode: Literal["auto", "semi", "manual"] = "auto"
+    detect: DetectParams | None = None
+    # validated-triangle filters (peel from the outer edge; constraint edges are never removed)
+    max_edge_length: float | None = Field(None, gt=0)
+    max_edge_factor: float | None = Field(None, gt=0)
+    min_angle_deg: float = Field(0.0, ge=0, lt=60)
+    keep_rejected: bool = True
     sync: bool | None = None
 
 

@@ -120,10 +120,8 @@ class DedupeReport:
     removed_zero_z: int
     # (kept original index, removed original index)
     duplicate_pairs: list[tuple[int, int]] = field(default_factory=list)
-
-
-def _round_key(xy: np.ndarray, tol: float) -> np.ndarray:
-    return np.round(xy / tol).astype(np.int64)
+    # per input point: index into the de-duplicated set (-1 when the point was dropped)
+    mapping: np.ndarray | None = None
 
 
 def dedupe(
@@ -131,14 +129,15 @@ def dedupe(
 ) -> tuple[PointSet, DedupeReport]:
     """Remove horizontally coincident points.
 
-    Two points are duplicates when their XY, rounded to `tol`, coincide. The *first*
-    occurrence is kept (the legacy code dropped the earlier one after sorting by X; keeping the
-    first is the more useful rule because survey points precede feature vertices).
-    `drop_zero_z` reproduces the legacy rule of discarding points with elevation exactly 0.
+    Two points are duplicates when their XY distance is <= `tol` (exact neighbour search with a
+    k-d tree, so pairs straddling a rounding cell are found too). Groups of mutually close points
+    are collapsed onto the *first* occurrence (survey points precede feature vertices, so the
+    surveyed elevation wins). `drop_zero_z` reproduces the legacy rule of discarding points with
+    elevation exactly 0. `report.mapping` maps every input index to its kept index.
     """
     n = len(points)
     if n == 0:
-        return points, DedupeReport(0, 0, 0, 0)
+        return points, DedupeReport(0, 0, 0, 0, mapping=np.zeros(0, dtype=np.int64))
     keep = np.ones(n, dtype=bool)
     removed_zero = 0
     if drop_zero_z:
@@ -147,13 +146,40 @@ def dedupe(
         keep &= ~zero
 
     idx_all = np.flatnonzero(keep)
-    keys = _round_key(points.xyz[idx_all, :2], tol)
-    _, first, inverse = np.unique(keys, axis=0, return_index=True, return_inverse=True)
-    inverse = np.asarray(inverse).reshape(-1)
-    first_of_group = idx_all[first[inverse]]  # original index of the kept representative
-    is_dup = first_of_group != idx_all
-    pairs = [(int(a), int(b)) for a, b in zip(first_of_group[is_dup], idx_all[is_dup])]
+    rep = idx_all.copy()  # representative (original index) of every candidate point
+    if len(idx_all) > 1 and tol > 0:
+        from scipy.spatial import cKDTree
+
+        xy = points.xyz[idx_all, :2]
+        pairs = cKDTree(xy).query_pairs(tol, output_type="ndarray")
+        if len(pairs):
+            # union-find on local indices; the smallest index of a group is its representative
+            parent = np.arange(len(idx_all))
+
+            def find(a: int) -> int:
+                while parent[a] != a:
+                    parent[a] = parent[parent[a]]
+                    a = parent[a]
+                return a
+
+            for a, b in pairs:
+                ra, rb = find(int(a)), find(int(b))
+                if ra != rb:
+                    if ra < rb:
+                        parent[rb] = ra
+                    else:
+                        parent[ra] = rb
+            roots = np.fromiter((find(int(i)) for i in range(len(idx_all))), dtype=np.int64, count=len(idx_all))
+            rep = idx_all[roots]
+    is_dup = rep != idx_all
+    pairs_out = [(int(a), int(b)) for a, b in zip(rep[is_dup], idx_all[is_dup])]
     keep[idx_all[is_dup]] = False
+
+    kept_orig = np.flatnonzero(keep)
+    pos = -np.ones(n, dtype=np.int64)
+    pos[kept_orig] = np.arange(len(kept_orig))
+    mapping = -np.ones(n, dtype=np.int64)
+    mapping[idx_all] = pos[rep]
 
     out = points.subset(keep)
     report = DedupeReport(
@@ -161,7 +187,8 @@ def dedupe(
         kept=len(out),
         removed_duplicates=int(is_dup.sum()),
         removed_zero_z=removed_zero,
-        duplicate_pairs=pairs,
+        duplicate_pairs=pairs_out,
+        mapping=mapping,
     )
     return out, report
 

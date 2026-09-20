@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from ...engine import crs as crsmod
 from ..auth import current_user, require_editor
 from ..db import AppDB
+from .. import services
 from ..deps import get_db, get_project, get_settings, get_store
 from ..gpkg import ProjectStore
 from ..schemas import HelmertRequest, ProjectCreate, ProjectOut, ProjectUpdate
@@ -118,5 +119,6 @@ def delete_project(project_id: str, db: AppDB = Depends(get_db), settings=Depend
     if user.get("authenticated") and user["role"] != "admin" and p.get("owner_id") != user["id"]:
         raise HTTPException(status_code=403, detail="only the owner or an admin can delete a project")
     db.delete_project(project_id)
+    services.evict_tin(settings.project_gpkg(project_id))
     shutil.rmtree(settings.project_dir(project_id), ignore_errors=True)
     return None

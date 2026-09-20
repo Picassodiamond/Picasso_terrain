@@ -173,3 +173,43 @@ table.data tr.selected td { background: #1e293b; }
 .layer-foot { color: var(--muted); font-size: 11px; padding: 6px 2px 0; border-top: 1px solid var(--border); margin-top: 4px; }
 .layer-sub { padding-left: 40px; }
 .layer-extra input.mini { width: 90px; }
+
+
+/* ---------------------------------------------------------------- module switcher */
+.module-switcher { display: flex; align-items: center; gap: 4px; margin-left: 10px; }
+.mtab { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.mtab:hover { color: var(--text); border-color: #475569; }
+.mtab.active { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
+.newdesign { position: relative; }
+.newdesign summary { list-style: none; }
+.newdesign summary::-webkit-details-marker { display: none; }
+.newdesign .menu { position: absolute; top: 30px; left: 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px; z-index: 30; min-width: 280px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.newdesign .menu-item { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; background: transparent; border: 0; color: var(--text); padding: 8px; border-radius: 6px; cursor: pointer; }
+.newdesign .menu-item:hover:not(:disabled) { background: #273449; }
+.newdesign .menu-item:disabled { opacity: .55; cursor: default; }
+.newdesign .menu-item .icon { font-size: 18px; width: 24px; }
+
+/* ---------------------------------------------------------------- road design workspace */
+.road-workspace { display: grid; grid-template-columns: 330px 1fr 400px; min-height: 0; }
+.road-side { background: var(--panel); border-right: 1px solid var(--border); overflow: auto; padding: 10px 12px; min-height: 0; }
+.road-side h3 { margin: 4px 0 8px; }
+.stage-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
+.stage { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; color: var(--muted); }
+.stage:hover { background: #172033; }
+.stage.active { background: var(--panel-2); color: var(--text); }
+.stage .num { width: 20px; height: 20px; border-radius: 50%; background: #1e3a5f; color: #bae6fd; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; flex: none; }
+.stage .spacer { flex: 1; }
+.road-centre { display: grid; grid-template-rows: 1fr 280px; min-height: 0; min-width: 0; }
+.plan-wrap { position: relative; min-height: 0; background: #0b1220; overflow: hidden; }
+.plan-canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.plan-toolbar { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; align-items: center; z-index: 5; flex-wrap: wrap; max-width: calc(100% - 60px); }
+.plan-toolbar .chip { background: rgba(17,24,39,.85); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; }
+.road-status { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 10px; background: rgba(15,23,42,.85); font-size: 11px; color: var(--muted); z-index: 5; white-space: pre; }
+.road-profile { border-top: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.road-profile .chart-head, .road-right .chart-head { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--border); }
+.road-profile .chart-head .spacer, .road-right .chart-head .spacer { flex: 1; }
+.road-profile-body, .road-section-body { flex: 1; min-height: 0; position: relative; }
+.road-right { border-left: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.road-right select { width: auto; }
+.terrain-badge { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #14532d; color: #bbf7d0; font-size: 12px; margin: 6px 0; }
+.terrain-badge.stale { background: #78350f; color: #fde68a; }

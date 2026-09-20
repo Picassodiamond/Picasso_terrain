@@ -13,10 +13,10 @@ export class ApiError extends Error {
 export interface User { id: string; username: string; role: string; organisation: string; authenticated: boolean }
 export interface AuthStatus { auth_enabled: boolean; open_registration: boolean; users: number; version: string }
 export interface CrsInfo { spec: string; name: string; is_local: boolean; epsg: number | null; proj4?: string | null; is_geographic?: boolean }
-export interface ProjectSummary { points: number; lines: Record<string, number>; tin_runs: number; contour_sets: number; alignments: number; section_sets: number; bounds: number[] | null; z_range: number[] | null }
+export interface ProjectSummary { points: number; lines: Record<string, number>; tin_runs: number; contour_sets: number; alignments: number; section_sets: number; bounds: number[] | null; z_range: number[] | null; designs?: Record<string, number> }
 export interface Project { id: string; name: string; description: string; crs: string; crs_info: CrsInfo; created: string; updated: string; settings: Record<string, unknown>; summary: ProjectSummary }
 export interface Job { id: string; project_id: string; kind: string; status: string; progress: number; message: string; params: Record<string, unknown>; result: Record<string, any> | null; error: string | null; created: string }
-export interface TinRun { id: number; created: string; name: string; params: Record<string, unknown>; stats: Record<string, number>; n_nodes: number; n_triangles: number; bounds: (number | null)[]; z_range: (number | null)[]; issues_count: number; issues: { kind: string; x: number; y: number; message: string }[] }
+export interface TinRun { id: number; created: string; name: string; params: Record<string, unknown>; stats: Record<string, any>; n_nodes: number; n_triangles: number; bounds: (number | null)[]; z_range: (number | null)[]; issues_count: number; issues: { kind: string; x: number; y: number; message: string }[] }
 export interface ContourStyle { major_color: string; minor_color: string; major_width: number; minor_width: number; ramp: string | null; opacity: number; label_format: string; label_prefix: string; label_suffix: string; label_every: number; label_major_only: boolean; text_height: number; show_labels: boolean }
 export interface ContourSet { id: number; run_id: number; created: string; name: string; params: Record<string, any>; style: Partial<ContourStyle>; n_lines: number; levels: number[] }
 export interface IPIn { x: number; y: number; radius: number; label: string }
@@ -29,6 +29,10 @@ export interface Comment { id: string; project_id: string; user_id: string | nul
 export interface Activity { id: number; username: string | null; action: string; target_type: string; target_id: string; detail: Record<string, any>; created: string }
 export interface Member { user_id: string; username: string; role: string; organisation: string; added: string }
 export type FeatureCollection = { type: "FeatureCollection"; features: any[] };
+export interface ModuleInfo { id: string; label: string; icon: string; kind: string; status: string; maturity?: string; description: string; requires: string[]; seeds?: string[]; stages: { id: string; label: string; description: string }[] }
+export interface Design { id: number; module: string; name: string; tin_run_id: number | null; alignment_id: number | null; settings: Record<string, any>; status: string; created: string; updated: string }
+export interface PointDetail { fid: number; id: string; x: number; y: number; z: number; remark: string; layer: string; source: string }
+export interface TileIndex { n: number; tile_triangles: number; n_triangles: number; n_nodes: number; bounds: number[]; z_range: number[]; tiles: { i: number; j: number; triangles: number; bounds: number[] }[] }
 
 async function request<T>(method: string, url: string, body?: unknown, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
@@ -88,7 +92,10 @@ export const api = {
       for (const [k, v] of Object.entries(form)) if (v !== undefined && v !== "") fd.append(k, String(v));
       return request<{ points_added: number; lines_added: Record<string, number>; warnings: string[]; summary: ProjectSummary }>("POST", `/api/projects/${pid}/import`, fd);
     },
-    points: (pid: string, layer?: string) => request<FeatureCollection>("GET", `/api/projects/${pid}/points.geojson${q({ layer })}`),
+    points: (pid: string, layer?: string, limit?: number) => request<FeatureCollection>("GET", `/api/projects/${pid}/points.geojson${q({ layer, limit })}`),
+    pointsBin: (pid: string, layer?: string) => request<ArrayBuffer>("GET", `/api/projects/${pid}/points.bin${q({ layer })}`),
+    point: (pid: string, fid: number) => request<PointDetail>("GET", `/api/projects/${pid}/points/${fid}`),
+    nearest: (pid: string, x: number, y: number, radius = 5) => request<PointDetail & { distance: number }>("GET", `/api/projects/${pid}/points/nearest${q({ x, y, radius })}`),
     pointLayers: (pid: string) => request<{ layer: string; n: number; zmin: number; zmax: number }[]>("GET", `/api/projects/${pid}/points/layers`),
     deletePoints: (pid: string, params: Record<string, unknown>) => request<{ deleted: number }>("DELETE", `/api/projects/${pid}/points${q(params)}`),
     lines: (pid: string, kind?: string) => request<FeatureCollection>("GET", `/api/projects/${pid}/lines.geojson${q({ kind })}`),
@@ -108,6 +115,15 @@ export const api = {
     issues: (pid: string, run: number) => request<FeatureCollection>("GET", `/api/projects/${pid}/tin/${run}/issues.geojson`),
     elevation: (pid: string, run: number, x: number, y: number) => request<{ z: number | null; inside: boolean }>("GET", `/api/projects/${pid}/tin/${run}/elevation${q({ x, y })}`),
     profile: (pid: string, run: number, coords: number[][]) => request<{ distance: number[]; z: (number | null)[]; xy: number[][]; length: number }>("POST", `/api/projects/${pid}/tin/${run}/profile`, { coords }),
+    rejected: (pid: string, run: number) => request<FeatureCollection & { total: number; counts: Record<string, number> }>("GET", `/api/projects/${pid}/tin/${run}/rejected.geojson`),
+    tiles: (pid: string, run: number) => request<TileIndex>("GET", `/api/projects/${pid}/tin/${run}/tiles`),
+    tileMesh: (pid: string, run: number, i: number, j: number) => request<ArrayBuffer>("GET", `/api/projects/${pid}/tin/${run}/tiles/${i}/${j}.bin`),
+  },
+  constraints: {
+    detect: (pid: string, body: Record<string, unknown> = {}) => request<FeatureCollection & { stats: Record<string, any> }>("POST", `/api/projects/${pid}/constraints/detect`, body),
+    accept: (pid: string, body: { features: { kind: string; coords: number[][]; name?: string }[]; source?: string; replace_auto?: boolean }) => request<{ added: number }>("POST", `/api/projects/${pid}/constraints/accept`, body),
+    list: (pid: string, source?: string) => request<FeatureCollection>("GET", `/api/projects/${pid}/constraints${q({ source })}`),
+    deleteAuto: (pid: string) => request<{ deleted: number }>("DELETE", `/api/projects/${pid}/constraints/auto`),
   },
   contours: {
     create: (pid: string, body: Record<string, unknown>) => request<Job>("POST", `/api/projects/${pid}/contours`, body),
@@ -151,6 +167,16 @@ export const api = {
     dxf: (pid: string, params: Record<string, unknown>) => `/api/projects/${pid}/export.dxf${q(params)}`,
     gpkg: (pid: string) => `/api/projects/${pid}/export.gpkg`,
     geojson: (pid: string) => `/api/projects/${pid}/export.geojson`,
+  },
+  modules: {
+    list: () => request<ModuleInfo[]>("GET", "/api/modules"),
+  },
+  designs: {
+    list: (pid: string) => request<Design[]>("GET", `/api/projects/${pid}/designs`),
+    create: (pid: string, body: { module: string; name?: string; tin_run_id?: number | null; alignment_id?: number | null; settings?: Record<string, unknown> }) => request<Design>("POST", `/api/projects/${pid}/designs`, body),
+    get: (pid: string, id: number) => request<Design>("GET", `/api/projects/${pid}/designs/${id}`),
+    patch: (pid: string, id: number, body: Record<string, unknown>) => request<Design>("PATCH", `/api/projects/${pid}/designs/${id}`, body),
+    delete: (pid: string, id: number) => request<void>("DELETE", `/api/projects/${pid}/designs/${id}`),
   },
   jobs: {
     get: (id: string) => request<Job>("GET", `/api/jobs/${id}`),

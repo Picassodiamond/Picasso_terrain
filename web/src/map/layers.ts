@@ -8,11 +8,11 @@ const FAR = Number.POSITIVE_INFINITY;
 const LABEL_FONT = "12px 'Segoe UI', system-ui, sans-serif";
 
 export type PickId =
-  | { type: "point"; fid: number; id: string; z: number; remark: string }
+  | { type: "point"; fid: number; z: number; id?: string; remark?: string }
   | { type: "ip"; index: number }
   | { type: "comment"; id: string }
   | { type: "section"; index: number }
-  | { type: "line"; fid: number; kind: string };
+  | { type: "line"; fid: number; kind: string; source?: string };
 
 const LINE_COLORS: Record<string, string> = { feature: "#38bdf8", boundary: "#e879f9", void: "#fb923c", contour: "#a3e635" };
 
@@ -36,6 +36,28 @@ export function rampColor(t: number, ramp: "terrain" | "viridis" | "grey" = "ter
   return stops[stops.length - 1][1];
 }
 
+/** Minimal GPU point-cloud appearance: per-vertex colour, fixed pixel size, one draw call. */
+function pointCloudAppearance(): Cesium.Appearance {
+  return new Cesium.Appearance({
+    renderState: { depthTest: { enabled: true } },
+    vertexShaderSource: `
+      in vec3 position3DHigh;
+      in vec3 position3DLow;
+      in vec4 color;
+      in float batchId;
+      out vec4 v_color;
+      void main() {
+        vec4 p = czm_computePosition();
+        v_color = color;
+        gl_Position = czm_modelViewProjectionRelativeToEye * p;
+        gl_PointSize = 2.5;
+      }`,
+    fragmentShaderSource: `
+      in vec4 v_color;
+      void main() { out_FragColor = v_color; }`,
+  });
+}
+
 export class MapLayers {
   private scene: Cesium.Scene;
   private frame: Frame;
@@ -56,8 +78,17 @@ export class MapLayers {
   commentPins = new Cesium.PointPrimitiveCollection();
   commentLabels = new Cesium.LabelCollection();
   issuePins = new Cesium.PointPrimitiveCollection();
-  tin: Cesium.Primitive | null = null;
-  tinWire: Cesium.Primitive | null = null;
+  /** dashed previews of suggested constraints while the user reviews them */
+  suggestions = new Cesium.PolylineCollection();
+  rejected: Cesium.Primitive | null = null;
+  /** TIN surface primitives: one for a small mesh, one per tile for a big one */
+  tinParts: Cesium.Primitive[] = [];
+  tinWires: Cesium.Primitive[] = [];
+  get tin(): Cesium.Primitive | null { return this.tinParts[0] ?? null; }
+  /** point cloud primitive used above PICKABLE_POINTS (single draw call, not pickable) */
+  pointsBig: Cesium.Primitive | null = null;
+  pointCount = 0;
+  static PICKABLE_POINTS = 150_000;
   hull: Cesium.Polyline | null = null;
   private hoverMarker: Cesium.PointPrimitive | null = null;
   private sectionPolys: Cesium.Polyline[] = [];
@@ -66,7 +97,7 @@ export class MapLayers {
   constructor(scene: Cesium.Scene, frame: Frame) {
     this.scene = scene;
     this.frame = frame;
-    for (const p of [this.lines, this.contours, this.alignmentLines, this.sections, this.points, this.alignmentPoints, this.markers, this.commentPins, this.issuePins, this.pointLabels, this.contourLabels, this.alignmentLabels, this.commentLabels, this.chainageTicks, this.chainageLabels, this.keyPoints, this.keyPointLabels]) {
+    for (const p of [this.lines, this.contours, this.alignmentLines, this.sections, this.points, this.alignmentPoints, this.markers, this.commentPins, this.issuePins, this.suggestions, this.pointLabels, this.contourLabels, this.alignmentLabels, this.commentLabels, this.chainageTicks, this.chainageLabels, this.keyPoints, this.keyPointLabels]) {
       scene.primitives.add(p);
     }
   }
@@ -80,22 +111,62 @@ export class MapLayers {
   }
 
   // ------------------------------------------------------------------ points
-  setPoints(fc: FeatureCollection, showLabels: boolean): void {
+  /** Survey points from points.bin (16 bytes per point). Up to PICKABLE_POINTS they are individual
+   *  pickable point primitives; above that a single GPU point cloud (click -> /points/nearest). */
+  setPointsBinary(buf: ArrayBuffer, labels: FeatureCollection | null): void {
     this.points.removeAll();
     this.pointLabels.removeAll();
-    const color = Cesium.Color.fromCssColorString("#fde68a");
+    if (this.pointsBig) { this.scene.primitives.remove(this.pointsBig); this.pointsBig = null; }
+    const dv = new DataView(buf);
+    if (String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)) !== "PLMP") throw new Error("bad points buffer");
+    const n = dv.getUint32(8, true), dtype = dv.getUint32(12, true);
+    const ox = dv.getFloat64(16, true), oy = dv.getFloat64(24, true), oz = dv.getFloat64(32, true);
+    let off = 40;
+    const xyz = new Float64Array(n * 3);
+    if (dtype === 0) {
+      const f = new Float32Array(buf, off, n * 3);
+      for (let i = 0; i < n; i++) { xyz[i * 3] = f[i * 3] + ox; xyz[i * 3 + 1] = f[i * 3 + 1] + oy; xyz[i * 3 + 2] = f[i * 3 + 2] + oz; }
+      off += n * 12;
+    } else { xyz.set(new Float64Array(buf.slice(off, off + n * 24))); off += n * 24; }
+    const fids = new Uint32Array(buf.slice(off, off + n * 4));
+    this.pointCount = n;
+    if (n <= MapLayers.PICKABLE_POINTS) {
+      const color = Cesium.Color.fromCssColorString("#fde68a");
+      for (let i = 0; i < n; i++) {
+        this.points.add({ position: this.c(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]), color, pixelSize: 5, outlineColor: Cesium.Color.BLACK, outlineWidth: 1,
+          disableDepthTestDistance: FAR, id: { type: "point", fid: fids[i], z: xyz[i * 3 + 2] } as PickId });
+      }
+    } else if (n > 0) {
+      const positions = new Float64Array(n * 3);
+      const colors = new Uint8Array(n * 4);
+      for (let i = 0; i < n; i++) {
+        const c = this.c(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]);
+        positions[i * 3] = c.x; positions[i * 3 + 1] = c.y; positions[i * 3 + 2] = c.z;
+        colors[i * 4] = 253; colors[i * 4 + 1] = 230; colors[i * 4 + 2] = 138; colors[i * 4 + 3] = 255;
+      }
+      const attrs = new Cesium.GeometryAttributes() as any;
+      attrs.position = new Cesium.GeometryAttribute({ componentDatatype: Cesium.ComponentDatatype.DOUBLE, componentsPerAttribute: 3, values: positions });
+      attrs.color = new Cesium.GeometryAttribute({ componentDatatype: Cesium.ComponentDatatype.UNSIGNED_BYTE, componentsPerAttribute: 4, normalize: true, values: colors });
+      const geometry = new Cesium.Geometry({ attributes: attrs, primitiveType: Cesium.PrimitiveType.POINTS,
+        boundingSphere: Cesium.BoundingSphere.fromVertices(positions as unknown as number[]) });
+      this.pointsBig = new Cesium.Primitive({ geometryInstances: new Cesium.GeometryInstance({ geometry }), appearance: pointCloudAppearance(),
+        asynchronous: false, allowPicking: false });
+      this.scene.primitives.add(this.pointsBig);
+    }
+    if (labels) this.setPointLabels(labels);
+    this.scene.requestRender();
+  }
+
+  /** Point number / RL labels from a (limited) GeoJSON fetch. */
+  setPointLabels(fc: FeatureCollection): void {
+    this.pointLabels.removeAll();
     for (const f of fc.features) {
       const [x, y, z] = f.geometry.coordinates;
       const p = f.properties;
-      const pos = this.c(x, y, z ?? 0);
-      this.points.add({ position: pos, color, pixelSize: 5, outlineColor: Cesium.Color.BLACK, outlineWidth: 1, disableDepthTestDistance: FAR,
-        id: { type: "point", fid: p.fid, id: p.id, z: p.z, remark: p.remark } as PickId });
-      if (showLabels) {
-        this.pointLabels.add({ position: pos, text: `${p.id || ""}${p.id && p.z != null ? "\n" : ""}${p.z != null ? Number(p.z).toFixed(2) : ""}`.trim(),
-          font: "11px system-ui", fillColor: Cesium.Color.fromCssColorString("#fef3c7"), outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(6, -6), horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
-          disableDepthTestDistance: FAR, distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 600) });
-      }
+      this.pointLabels.add({ position: this.c(x, y, z ?? 0), text: `${p.id || ""}${p.id && p.z != null ? "\n" : ""}${p.z != null ? Number(p.z).toFixed(2) : ""}`.trim(),
+        font: "11px system-ui", fillColor: Cesium.Color.fromCssColorString("#fef3c7"), outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(6, -6), horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
+        disableDepthTestDistance: FAR, distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 600) });
     }
     this.scene.requestRender();
   }
@@ -109,14 +180,19 @@ export class MapLayers {
       const coords: number[][] = f.geometry.coordinates;
       if (coords.length < 2) continue;
       const kind = f.properties.kind || "feature";
+      const source = f.properties.source || "";
       // 2-D lines (boundary / void polygons, Z = 0) are draped on the TIN when it is available
       const positions = coords.map((c) => {
         const z = c[2] && c[2] !== 0 ? c[2] : zAt ? zAt(c[0], c[1]) : 0;
         return this.c(c[0], c[1], z + 0.15);
       });
-      this.lines.add({ positions, width: kind === "boundary" ? 3 : 2,
-        material: Cesium.Material.fromType("Color", { color: Cesium.Color.fromCssColorString(LINE_COLORS[kind] || "#38bdf8") }),
-        id: { type: "line", fid: f.properties.fid, kind } as PickId });
+      const color = Cesium.Color.fromCssColorString(LINE_COLORS[kind] || "#38bdf8");
+      // automatically detected constraints are dashed so they read as "suggested, not surveyed"
+      const material = source === "auto"
+        ? Cesium.Material.fromType("PolylineDash", { color, dashLength: 12 })
+        : Cesium.Material.fromType("Color", { color });
+      this.lines.add({ positions, width: kind === "boundary" ? 3 : 2, material,
+        id: { type: "line", fid: f.properties.fid, kind, source } as PickId });
     }
     this.scene.requestRender();
   }
@@ -131,11 +207,22 @@ export class MapLayers {
   }
 
   // ------------------------------------------------------------------ TIN
-  /** mesh.bin -> shaded primitive with per-vertex colours. */
+  clearTin(): void {
+    for (const p of this.tinParts) this.scene.primitives.remove(p);
+    for (const p of this.tinWires) this.scene.primitives.remove(p);
+    this.tinParts = [];
+    this.tinWires = [];
+    this.scene.requestRender();
+  }
+
+  /** mesh.bin -> shaded primitive with per-vertex colours (replaces any previous surface). */
   setTin(buf: ArrayBuffer | null, style: { mode: "ramp" | "flat" | "wire"; opacity: number }, zRangeOverride?: [number, number]): void {
-    if (this.tin) { this.scene.primitives.remove(this.tin); this.tin = null; }
-    if (this.tinWire) { this.scene.primitives.remove(this.tinWire); this.tinWire = null; }
-    if (!buf) { this.scene.requestRender(); return; }
+    this.clearTin();
+    if (buf) this.addTinPart(buf, style, zRangeOverride);
+  }
+
+  /** Add one mesh (a whole TIN or one tile of a big one). Pass the run's z range so tiles share one colour ramp. */
+  addTinPart(buf: ArrayBuffer, style: { mode: "ramp" | "flat" | "wire"; opacity: number }, zRangeOverride?: [number, number]): void {
     const dv = new DataView(buf);
     if (String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)) !== "PLMM") throw new Error("bad mesh");
     const n = dv.getUint32(8, true);
@@ -197,13 +284,14 @@ export class MapLayers {
       boundingSphere: Cesium.BoundingSphere.fromVertices(Array.from(positions)),
     });
     const translucent = alpha < 255;
-    this.tin = new Cesium.Primitive({
+    const prim = new Cesium.Primitive({
       geometryInstances: new Cesium.GeometryInstance({ geometry }),
       appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent, closed: false }),
       asynchronous: false,
       allowPicking: true,
     });
-    this.scene.primitives.add(this.tin);
+    this.tinParts.push(prim);
+    this.scene.primitives.add(prim);
     if (style.mode === "wire") {
       const wireIdx = new Uint32Array(m * 6);
       for (let t = 0; t < m; t++) {
@@ -219,9 +307,10 @@ export class MapLayers {
         attributes: wattrs,
         indices: wireIdx, primitiveType: Cesium.PrimitiveType.LINES, boundingSphere: geometry.boundingSphere,
       });
-      this.tinWire = new Cesium.Primitive({ geometryInstances: new Cesium.GeometryInstance({ geometry: wgeom }),
+      const wire = new Cesium.Primitive({ geometryInstances: new Cesium.GeometryInstance({ geometry: wgeom }),
         appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: false }), asynchronous: false, allowPicking: false });
-      this.scene.primitives.add(this.tinWire);
+      this.tinWires.push(wire);
+      this.scene.primitives.add(wire);
     }
     this.scene.requestRender();
   }
@@ -232,6 +321,52 @@ export class MapLayers {
     const ring: number[][] = fc.features[0].geometry.coordinates[0];
     this.hull = this.lines.add({ positions: ring.map((c) => this.c(c[0], c[1], 0.2)), width: 1.5,
       material: Cesium.Material.fromType("PolylineDash", { color: Cesium.Color.fromCssColorString("#94a3b8") }) });
+    this.scene.requestRender();
+  }
+
+  /** Suggested constraints (detect step): dashed, magenta for boundaries, orange for holes; dimmed when deselected. */
+  setSuggestions(features: any[] | null, selected?: Set<number>): void {
+    this.suggestions.removeAll();
+    if (features) {
+      for (const f of features) {
+        const coords: number[][] = f.geometry.coordinates;
+        const on = !selected || selected.has(f.properties.index);
+        const base = f.properties.kind === "boundary" ? "#e879f9" : "#fb923c";
+        const color = Cesium.Color.fromCssColorString(base).withAlpha(on ? 1 : 0.35);
+        this.suggestions.add({ positions: coords.map((c) => this.c(c[0], c[1], (c[2] ?? 0) + 0.4)), width: on ? 4 : 2,
+          material: Cesium.Material.fromType("PolylineDash", { color, dashLength: 10 }) });
+      }
+    }
+    this.scene.requestRender();
+  }
+
+  /** Triangles the TIN build rejected, coloured by reason (outside boundary, hole, long edge, low quality). */
+  setRejected(fc: FeatureCollection | null): void {
+    if (this.rejected) { this.scene.primitives.remove(this.rejected); this.rejected = null; }
+    if (!fc || !fc.features.length) { this.scene.requestRender(); return; }
+    const REASON_COLORS: Record<string, [number, number, number]> = { outside_boundary: [148, 163, 184], hole: [251, 146, 60], long_edge: [168, 85, 247], low_quality: [234, 179, 8] };
+    const m = fc.features.length;
+    const positions = new Float64Array(m * 9);
+    const colors = new Uint8Array(m * 12);
+    const indices = new Uint32Array(m * 3);
+    for (let t = 0; t < m; t++) {
+      const ring: number[][] = fc.features[t].geometry.coordinates[0];
+      const rgb = REASON_COLORS[fc.features[t].properties.reason] || [239, 68, 68];
+      for (let k = 0; k < 3; k++) {
+        const c = this.c(ring[k][0], ring[k][1], (ring[k][2] ?? 0) + 0.05);
+        positions.set([c.x, c.y, c.z], (t * 3 + k) * 3);
+        colors.set([rgb[0], rgb[1], rgb[2], 110], (t * 3 + k) * 4);
+        indices[t * 3 + k] = t * 3 + k;
+      }
+    }
+    const attrs = new Cesium.GeometryAttributes() as any;
+    attrs.position = new Cesium.GeometryAttribute({ componentDatatype: Cesium.ComponentDatatype.DOUBLE, componentsPerAttribute: 3, values: positions });
+    attrs.color = new Cesium.GeometryAttribute({ componentDatatype: Cesium.ComponentDatatype.UNSIGNED_BYTE, componentsPerAttribute: 4, normalize: true, values: colors });
+    const geometry = new Cesium.Geometry({ attributes: attrs, indices, primitiveType: Cesium.PrimitiveType.TRIANGLES,
+      boundingSphere: Cesium.BoundingSphere.fromVertices(Array.from(positions)) });
+    this.rejected = new Cesium.Primitive({ geometryInstances: new Cesium.GeometryInstance({ geometry }),
+      appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: true, closed: false }), asynchronous: false, allowPicking: false });
+    this.scene.primitives.add(this.rejected);
     this.scene.requestRender();
   }
 
@@ -386,6 +521,7 @@ export class MapLayers {
 
   setVisibility(v: import("../state").LayerVisibility): void {
     this.points.show = v.points;
+    if (this.pointsBig) this.pointsBig.show = v.points;
     this.pointLabels.show = v.points && v.pointLabels;
     const kindShow: Record<string, boolean> = { feature: v.featureLines, boundary: v.boundary, void: v.voids, contour: v.digitisedContours };
     this.lines.show = true;
@@ -395,9 +531,10 @@ export class MapLayers {
       if (id && id.type === "line") pl.show = kindShow[id.kind] ?? true;
       else if (pl === this.hull) pl.show = v.tinHull;
     }
-    if (this.tin) this.tin.show = v.tin;
-    if (this.tinWire) this.tinWire.show = v.tin;
+    for (const p of this.tinParts) p.show = v.tin;
+    for (const p of this.tinWires) p.show = v.tin;
     this.issuePins.show = v.tinIssues;
+    if (this.rejected) this.rejected.show = v.tinRejected;
     this.contours.show = v.contours;
     this.contourLabels.show = v.contours && v.contourLabels;
     this.alignmentLines.show = this.alignmentPoints.show = this.alignmentLabels.show = v.alignment;

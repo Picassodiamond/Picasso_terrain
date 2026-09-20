@@ -155,14 +155,14 @@ export class MapViewer {
   }
 
   /** Terrain primitive + reference height used for parallax-free picking. */
-  private pickTarget: Cesium.Primitive | null = null;
+  private pickTargets = new Set<Cesium.Primitive>();
   private pickHeight = 0;
   private pickCentre: [number, number] | null = null;
   private lastBounds: number[] | null = null;
   private lastZRange: number[] | null | undefined = null;
 
-  setPickTarget(prim: Cesium.Primitive | null, height: number, centre: [number, number] | null): void {
-    this.pickTarget = prim;
+  setPickTarget(prim: Cesium.Primitive | Cesium.Primitive[] | null, height: number, centre: [number, number] | null): void {
+    this.pickTargets = new Set(prim ? (Array.isArray(prim) ? prim : [prim]) : []);
     this.pickHeight = height;
     this.pickCentre = centre;
   }
@@ -173,9 +173,9 @@ export class MapViewer {
    *     (so clicks beside the TIN are still at the right elevation, unlike the ellipsoid at 0 m). */
   pickProject(windowPos: Cesium.Cartesian2): { x: number; y: number; z: number } | null {
     let cart: Cesium.Cartesian3 | undefined;
-    if (this.pickTarget && this.scene.pickPositionSupported && this.scene.mode === Cesium.SceneMode.SCENE3D) {
+    if (this.pickTargets.size && this.scene.pickPositionSupported && this.scene.mode === Cesium.SceneMode.SCENE3D) {
       const picked = this.scene.pick(windowPos);
-      if (picked && picked.primitive === this.pickTarget) {
+      if (picked && this.pickTargets.has(picked.primitive)) {
         const p = this.scene.pickPosition(windowPos);
         if (p && Cesium.defined(p) && !Number.isNaN(p.x)) cart = p;
       }
@@ -197,7 +197,7 @@ export class MapViewer {
       if (p) {
         // lift the ellipsoid hit to the reference height (2D / Columbus modes)
         const carto = Cesium.Cartographic.fromCartesian(p);
-        carto.height = this.pickHeight;
+        carto.height = this.pickHeight + this.frame.heightOffset;
         cart = Cesium.Cartographic.toCartesian(carto);
       }
     }

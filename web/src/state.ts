@@ -23,7 +23,7 @@ export interface AppState {
 export interface LayerVisibility {
   points: boolean; pointLabels: boolean;
   featureLines: boolean; boundary: boolean; voids: boolean; digitisedContours: boolean;
-  tin: boolean; tinHull: boolean; tinIssues: boolean;
+  tin: boolean; tinHull: boolean; tinIssues: boolean; tinRejected: boolean;
   contours: boolean; contourLabels: boolean;
   alignment: boolean; chainageLabels: boolean; keyPoints: boolean;
   sections: boolean;
@@ -33,7 +33,7 @@ export interface LayerVisibility {
 export const DEFAULT_LAYERS: LayerVisibility = {
   points: true, pointLabels: false,
   featureLines: true, boundary: true, voids: true, digitisedContours: true,
-  tin: true, tinHull: false, tinIssues: false,
+  tin: true, tinHull: false, tinIssues: false, tinRejected: false,
   contours: true, contourLabels: true,
   alignment: true, chainageLabels: true, keyPoints: true,
   sections: true,

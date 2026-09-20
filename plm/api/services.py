@@ -4,14 +4,17 @@ from __future__ import annotations
 import io
 import json
 import math
+import os
 import struct
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
 from shapely.geometry import Polygon
 
-from ..engine import build_tin, contour_labels, contour_tin
+from ..engine import REJECT_REASONS, Constraint, build_tin, contour_labels, contour_tin, suggest_constraints
 from ..engine import crs as crsmod
 from ..engine.alignment import IP, HorizontalAlignment, format_chainage
 from ..engine.contour import ContourLine
@@ -172,6 +175,10 @@ def _read_xlsx_points(data: bytes, mapping: dict | None) -> PointSet:
 
 
 # ------------------------------------------------------------------ TIN
+_STORE_KIND = {"boundary": "boundary", "hole": "void", "void": "void", "breakline": "feature", "feature": "feature", "contour": "contour"}
+_ENGINE_KIND = {"boundary": "boundary", "void": "hole", "feature": "breakline", "contour": "breakline"}
+
+
 def _boundary_geoms(store: ProjectStore, kind: str) -> list[Polygon]:
     out = []
     for ln in store.lines(kind=kind):
@@ -185,63 +192,282 @@ def _boundary_geoms(store: ProjectStore, kind: str) -> list[Polygon]:
     return out
 
 
+def _stored_constraints(store: ProjectStore, params: dict) -> list[Constraint]:
+    """Project lines -> engine constraints, honouring the use_* switches and layer filters."""
+    items: list[Constraint] = []
+    if params.get("use_features", True):
+        for ln in store.lines(kind="feature", layers=params.get("feature_layers") or None):
+            items.append(Constraint("breakline", ln["coords"], ln["name"], ln.get("source", ""), ln["fid"]))
+        for ln in store.lines(kind="contour"):
+            items.append(Constraint("breakline", ln["coords"], ln["name"], ln.get("source", ""), ln["fid"]))
+    if params.get("use_boundary", True):
+        for ln in store.lines(kind="boundary"):
+            items.append(Constraint("boundary", ln["coords"], ln["name"], ln.get("source", ""), ln["fid"]))
+    if params.get("use_voids", True):
+        for ln in store.lines(kind="void"):
+            items.append(Constraint("hole", ln["coords"], ln["name"], ln.get("source", ""), ln["fid"]))
+    return items
+
+
+def _detect(store: ProjectStore, pts: PointSet, detect: dict | None):
+    d = dict(detect or {})
+    d.pop("point_layers", None)
+    return suggest_constraints(pts.xyz, edge_factor=float(d.get("edge_factor") or 3.0), max_edge=d.get("max_edge"),
+                               min_hole_area=d.get("min_hole_area"), min_hole_triangles=int(d.get("min_hole_triangles") or 3),
+                               detect_holes=bool(d.get("detect_holes", True)))
+
+
 def run_tin(store: ProjectStore, params: dict, progress=None) -> dict:
-    pts = store.points(layers=params.get("point_layers") or None)
+    """points -> (automatic constraints) -> constrained TIN -> validated triangles.
+
+    constraint_mode
+      auto    when no boundary from the user exists (drawn / imported / accepted), detect the data
+              limit and gaps, store them as lines with source 'auto' (replacing older auto lines)
+              and use them; otherwise identical to manual
+      semi    the stored constraints, i.e. whatever the user accepted after reviewing suggestions
+      manual  the stored constraints only
+    """
+    _, xyz = store.points_xyz(layers=params.get("point_layers") or None)
+    pts = PointSet(xyz)
     if len(pts) < 3:
         raise ServiceError("at least three points are required (import points first)", 400)
-    features = []
-    if params.get("use_features", True):
-        features = [ln["coords"] for ln in store.lines(kind="feature", layers=params.get("feature_layers") or None)]
-        features += [ln["coords"] for ln in store.lines(kind="contour")]
-    boundary = _boundary_geoms(store, "boundary") if params.get("use_boundary", True) else []
-    voids = _boundary_geoms(store, "void") if params.get("use_voids", True) else []
+    mode = params.get("constraint_mode", "auto")
+    items = _stored_constraints(store, params)
+    detection: dict | None = None
+    if mode == "auto" and params.get("use_boundary", True):
+        user_boundary = any(c.kind == "boundary" and c.source != "auto" for c in items)
+        if not user_boundary:
+            if progress:
+                progress(0.05, "detecting constraints")
+            det = _detect(store, pts, params.get("detect"))
+            detection = dict(det.stats)
+            store.delete_lines(source="auto")
+            items = [c for c in items if c.source != "auto"]
+            for sug in det.suggestions:
+                if sug.kind == "hole" and not params.get("use_voids", True):
+                    continue
+                store.add_lines([sug.coords], _STORE_KIND[sug.kind], layer="Auto", source="auto", names=[sug.reason[:120]])
+                items.append(sug.to_constraint(source="auto", name=sug.reason[:120]))
     if progress:
         progress(0.1, "triangulating")
     res = build_tin(
-        pts, features,
-        boundary=(boundary if boundary else None), voids=voids,
+        pts,
+        constraints=items,
         dedupe_tol=float(params.get("dedupe_tol", 0.001)),
         drop_zero_z=bool(params.get("drop_zero_z", False)),
         boundary_mode=params.get("boundary_mode", "inside"),
+        max_edge_length=params.get("max_edge_length"),
+        max_edge_factor=params.get("max_edge_factor"),
+        min_angle_deg=float(params.get("min_angle_deg") or 0.0),
+        keep_rejected=bool(params.get("keep_rejected", True)),
     )
     if progress:
         progress(0.8, "saving")
+    stats = dict(res.stats)
+    if detection is not None:
+        stats["detection"] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in detection.items()}
+    stats["constraint_mode"] = mode
     stored = {k: v for k, v in params.items() if k != "sync"}
-    run_id = store.save_tin(res.tin, stored, res.stats, res.issues, res.node_source, name=params.get("name", ""))
+    run_id = store.save_tin(res.tin, stored, stats, res.issues, res.node_source, name=params.get("name", ""), rejected=res.rejected)
     run = store.get_tin_run(run_id)
     assert run is not None
     return run
+
+
+def detect_constraints(store: ProjectStore, params: dict, project_crs: str | None, out_crs: str | None) -> dict:
+    """Suggestions as GeoJSON (closed LineStrings) - nothing is stored."""
+    _, xyz = store.points_xyz(layers=params.get("point_layers") or None)
+    pts = PointSet(xyz)
+    if len(pts) < 3:
+        raise ServiceError("at least three points are required (import points first)", 400)
+    det = _detect(store, pts, params)
+    feats = []
+    for i, sug in enumerate(det.suggestions):
+        xy = _transform(sug.coords[:, :2], project_crs, out_crs)
+        coords = np.column_stack([xy, sug.coords[:, 2]])
+        feats.append({"type": "Feature", "id": i,
+                      "geometry": {"type": "LineString", "coordinates": _rounded(coords, 6)},
+                      "properties": {"index": i, "kind": sug.kind, "reason": sug.reason, "confidence": round(float(sug.confidence), 3),
+                                     "stats": {k: (round(v, 3) if isinstance(v, float) else v) for k, v in sug.stats.items()},
+                                     "closed": True}})
+    fc = _fc(feats, out_crs or project_crs)
+    fc["stats"] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in det.stats.items()}
+    return fc
+
+
+def accept_constraints(store: ProjectStore, body: dict) -> dict:
+    """Store reviewed constraints as project lines."""
+    feats = body.get("features") or []
+    if body.get("replace_auto"):
+        store.delete_lines(source="auto")
+    added = 0
+    for f in feats:
+        kind = _STORE_KIND.get(f.get("kind", "feature"))
+        if kind is None:
+            raise ServiceError(f"unknown constraint kind {f.get('kind')!r}", 400)
+        coords = np.asarray(f.get("coords") or [], float)
+        if coords.ndim != 2 or len(coords) < 2:
+            raise ServiceError("coords must be a list of at least two [x, y(, z)]", 400)
+        if kind in ("boundary", "void") and not np.allclose(coords[0, :2], coords[-1, :2]):
+            coords = np.vstack([coords, coords[:1]])
+        added += store.add_lines([coords], kind, layer=f.get("layer") or kind.capitalize(), source=str(body.get("source") or "accepted"),
+                                 names=[f.get("name", "")])
+    return {"added": added, "summary": store.line_summary()}
+
+
+def rejected_geojson(store: ProjectStore, run_id: int, project_crs: str | None, out_crs: str | None, limit: int = 50000) -> dict:
+    try:
+        xyz, reason = store.load_rejected(run_id)
+    except KeyError:
+        raise ServiceError(f"TIN run {run_id} not found", 404)
+    n = min(len(reason), limit)
+    feats = []
+    if n:
+        flat = _transform(xyz[:n].reshape(-1, 3)[:, :2], project_crs, out_crs).reshape(n, 3, 2)
+        for i in range(n):
+            ring = np.column_stack([flat[i], xyz[i, :, 2]])
+            ring = np.vstack([ring, ring[:1]])
+            feats.append({"type": "Feature", "id": i, "geometry": {"type": "Polygon", "coordinates": [_rounded(ring, 4)]},
+                          "properties": {"reason": REJECT_REASONS.get(int(reason[i]), "unknown")}})
+    fc = _fc(feats, out_crs or project_crs)
+    fc["total"] = int(len(reason))
+    fc["counts"] = {name: int((reason == code).sum()) for code, name in REJECT_REASONS.items() if (reason == code).any()}
+    return fc
+
+
+# ------------------------------------------------------------------ TIN cache
+# A TIN run is immutable once saved, so the last few loaded TINs are kept per process (their
+# topology and grid index are expensive to rebuild for every spot height / profile request).
+# Bounded by PLM_TIN_CACHE entries (default 2); evicted on delete.
+TIN_CACHE_SIZE = int(os.environ.get("PLM_TIN_CACHE", "2"))
+_TIN_CACHE: "OrderedDict[tuple[str, int], TIN]" = OrderedDict()
+_TIN_LOCK = threading.Lock()
+
+
+def evict_tin(store_path, run_id: int | None = None) -> None:
+    """Drop cached TINs of a project (one run, or all runs when run_id is None)."""
+    key_path = str(store_path)
+    with _TIN_LOCK:
+        for k in [k for k in _TIN_CACHE if k[0] == key_path and (run_id is None or k[1] == int(run_id))]:
+            _TIN_CACHE.pop(k, None)
+
+
+def tin_cache_info() -> dict:
+    with _TIN_LOCK:
+        return {"size": len(_TIN_CACHE), "limit": TIN_CACHE_SIZE, "keys": [f"{Path(k[0]).parent.name}:{k[1]}" for k in _TIN_CACHE]}
 
 
 def load_tin(store: ProjectStore, run_id: int | None) -> tuple[int, TIN]:
     rid = run_id if run_id is not None else store.latest_tin_run_id()
     if rid is None:
         raise ServiceError("no TIN has been built for this project yet", 404)
+    key = (str(store.path), int(rid))
+    with _TIN_LOCK:
+        tin = _TIN_CACHE.get(key)
+        if tin is not None:
+            _TIN_CACHE.move_to_end(key)
+            return int(rid), tin
     try:
         tin, _ = store.load_tin(int(rid))
     except KeyError:
         raise ServiceError(f"TIN run {rid} not found", 404)
+    if TIN_CACHE_SIZE > 0:
+        with _TIN_LOCK:
+            _TIN_CACHE[key] = tin
+            _TIN_CACHE.move_to_end(key)
+            while len(_TIN_CACHE) > TIN_CACHE_SIZE:
+                _TIN_CACHE.popitem(last=False)
     return int(rid), tin
 
 
-def mesh_binary(tin: TIN, project_crs: str | None, out_crs: str | None) -> bytes:
+def _mesh_bytes(nodes: np.ndarray, triangles: np.ndarray, project_crs: str | None, out_crs: str | None) -> bytes:
     """Binary mesh: header + positions + indices.
 
     header: b'PLMM', uint32 version(1), uint32 n_nodes, uint32 n_tris, uint32 dtype(0=f32 relative,
     1=f64 absolute), float64 origin[3]; then positions (n*3) and uint32 indices (m*3).
     """
-    nodes = tin.nodes
     if out_crs and out_crs.lower() not in ("project", "") and out_crs != project_crs:
         xy = _transform(nodes[:, :2], project_crs, out_crs)
         pos = np.column_stack([xy, nodes[:, 2]]).astype(np.float64)
         dtype = 1
         origin = np.zeros(3)
     else:
-        origin = nodes.min(axis=0)
+        origin = nodes.min(axis=0) if len(nodes) else np.zeros(3)
         pos = (nodes - origin).astype(np.float32)
         dtype = 0
-    head = b"PLMM" + struct.pack("<IIII", 1, tin.n_nodes, tin.n_triangles, dtype) + struct.pack("<3d", *origin)
-    return head + pos.tobytes() + tin.triangles.astype(np.uint32).tobytes()
+    head = b"PLMM" + struct.pack("<IIII", 1, len(nodes), len(triangles), dtype) + struct.pack("<3d", *origin)
+    return head + pos.tobytes() + np.ascontiguousarray(triangles, dtype=np.uint32).tobytes()
+
+
+def mesh_binary(tin: TIN, project_crs: str | None, out_crs: str | None) -> bytes:
+    return _mesh_bytes(tin.nodes, tin.triangles, project_crs, out_crs)
+
+
+# ------------------------------------------------------------------ mesh tiles
+TILE_TRIANGLES = int(os.environ.get("PLM_TILE_TRIANGLES", "100000"))
+
+
+def tin_tiles(tin: TIN) -> dict:
+    """Split the triangles of a big TIN into an N x N grid of tiles (by centroid) so the browser can
+    load them progressively and Cesium can frustum-cull them. Cached on the TIN object."""
+    cached = getattr(tin, "_tiles", None)
+    if cached is not None:
+        return cached
+    m = tin.n_triangles
+    n = max(1, int(np.ceil(np.sqrt(m / TILE_TRIANGLES))))
+    x0, y0, x1, y1 = tin.bounds()
+    w = max(x1 - x0, 1e-9)
+    h = max(y1 - y0, 1e-9)
+    c = tin.centroids()
+    ti = np.clip(((c[:, 0] - x0) / w * n).astype(np.int64), 0, n - 1)
+    tj = np.clip(((c[:, 1] - y0) / h * n).astype(np.int64), 0, n - 1)
+    tile_id = tj * n + ti
+    tiles = []
+    for tid in np.unique(tile_id):
+        mask = tile_id == tid
+        p = tin.nodes[tin.triangles[mask], :2].reshape(-1, 2)
+        tiles.append({"i": int(tid % n), "j": int(tid // n), "triangles": int(mask.sum()),
+                      "bounds": [float(p[:, 0].min()), float(p[:, 1].min()), float(p[:, 0].max()), float(p[:, 1].max())]})
+    out = {"n": n, "tile_triangles": TILE_TRIANGLES, "n_triangles": m, "n_nodes": tin.n_nodes,
+           "bounds": [x0, y0, x1, y1], "z_range": list(tin.z_range()), "tiles": tiles, "_ids": tile_id}
+    tin._tiles = out  # type: ignore[attr-defined]
+    return out
+
+
+def tile_mesh_binary(tin: TIN, i: int, j: int, project_crs: str | None, out_crs: str | None) -> bytes:
+    info = tin_tiles(tin)
+    n = info["n"]
+    if not (0 <= i < n and 0 <= j < n):
+        raise ServiceError("tile out of range", 404)
+    mask = info["_ids"] == j * n + i
+    if not mask.any():
+        raise ServiceError("empty tile", 404)
+    tris = tin.triangles[mask]
+    used, inv = np.unique(tris.reshape(-1), return_inverse=True)
+    return _mesh_bytes(tin.nodes[used], np.asarray(inv).reshape(tris.shape), project_crs, out_crs)
+
+
+def tiles_public(info: dict) -> dict:
+    return {k: v for k, v in info.items() if not k.startswith("_")}
+
+
+# ------------------------------------------------------------------ binary points
+def points_binary(store: ProjectStore, project_crs: str | None, out_crs: str | None, layers=None) -> bytes:
+    """Binary points: b'PLMP', uint32 version(1), uint32 n, uint32 dtype(0=f32 relative, 1=f64 absolute),
+    float64 origin[3]; then positions (n*3) and uint32 fids (n). 16 bytes per point instead of
+    about 230 in GeoJSON; ids / remarks are fetched on click via /points/{fid}."""
+    fids, xyz = store.points_xyz(layers=layers)
+    if out_crs and out_crs.lower() not in ("project", "") and out_crs != project_crs:
+        xy = _transform(xyz[:, :2], project_crs, out_crs)
+        pos = np.column_stack([xy, xyz[:, 2]]).astype(np.float64)
+        dtype = 1
+        origin = np.zeros(3)
+    else:
+        origin = xyz.min(axis=0) if len(xyz) else np.zeros(3)
+        pos = (xyz - origin).astype(np.float32)
+        dtype = 0
+    head = b"PLMP" + struct.pack("<III", 1, len(fids), dtype) + struct.pack("<3d", *origin)
+    return head + pos.tobytes() + fids.astype(np.uint32).tobytes()
 
 
 def mesh_json(tin: TIN, project_crs: str | None, out_crs: str | None) -> dict:
@@ -289,7 +515,8 @@ def lines_geojson(store: ProjectStore, project_crs: str | None, out_crs: str | N
         coords = np.column_stack([xy, c[:, 2]])
         feats.append({"type": "Feature", "id": ln["fid"],
                       "geometry": {"type": "LineString", "coordinates": _rounded(coords, 6)},
-                      "properties": {"fid": ln["fid"], "kind": ln["kind"], "layer": ln["layer"], "name": ln["name"], "closed": ln["closed"]}})
+                      "properties": {"fid": ln["fid"], "kind": ln["kind"], "layer": ln["layer"], "name": ln["name"], "closed": ln["closed"],
+                                     "source": ln.get("source", "")}})
     return _fc(feats, out_crs or project_crs)
 
 

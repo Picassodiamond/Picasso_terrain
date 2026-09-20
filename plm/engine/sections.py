@@ -83,23 +83,17 @@ def generate_profile(
     sample = tin.sample_line(all_xy, include_vertices=True)
     ch = np.interp(sample.distance, dist, all_ch)
 
-    # classify: vertex samples vs edge crossings
-    vert_d = set(np.round(dist, 6).tolist())
-    pts: list[ProfilePoint] = []
-    for d, (x, y), z in zip(sample.distance, sample.xy, sample.z):
-        c = float(np.interp(d, dist, all_ch))
-        if round(float(d), 6) in vert_d:
-            k = int(np.argmin(np.abs(dist - d)))
-            s = str(src[k])
-        else:
-            if not include_edge_crossings:
-                continue
-            s = "edge"
-        pts.append(ProfilePoint(c, float(x), float(y), float(z), s))
-    del ch
-    # only keep station/curve vertices that were asked for + edges (densified curve vertices are
-    # useful for a smooth profile, so they stay, labelled 'curve')
-    return pts
+    # classify: vertex samples (station / curve) vs edge crossings - vectorised, a 100 km
+    # centreline has tens of thousands of samples
+    k = np.clip(np.searchsorted(dist, sample.distance), 0, len(dist) - 1)
+    k_prev = np.maximum(k - 1, 0)
+    k = np.where(np.abs(dist[k_prev] - sample.distance) < np.abs(dist[k] - sample.distance), k_prev, k)
+    is_vertex = np.abs(dist[k] - sample.distance) <= 1e-6 * max(1.0, float(dist[-1]))
+    kinds = np.where(is_vertex, src[k], "edge")
+    keep = is_vertex | include_edge_crossings
+    # densified curve vertices stay (labelled 'curve') because they give a smooth profile
+    return [ProfilePoint(float(c), float(x), float(y), float(z), str(s))
+            for c, (x, y), z, s, m in zip(ch, sample.xy, sample.z, kinds, keep) if m]
 
 
 def generate_cross_sections(

@@ -6,9 +6,11 @@ import { el } from "./ui/dom";
 import { renderLogin } from "./ui/login";
 import { renderProjects } from "./ui/projects";
 import { Workspace } from "./ui/workspace";
+import { moduleById, terrainHash, type ModuleInstance } from "./modules/registry";
 
 const root = document.getElementById("app")!;
-let workspace: Workspace | null = null;
+/** what is open: the terrain workspace of a project, or a design module workspace */
+let current: { kind: "terrain"; ws: Workspace; pid: string } | { kind: "design"; inst: ModuleInstance; pid: string; designId: number } | null = null;
 
 // toasts
 const toasts = el("div", { class: "toasts" });
@@ -19,17 +21,50 @@ store.subscribe("toast", ({ text, kind }: { text: string; kind: string }) => {
   setTimeout(() => t.remove(), kind === "error" ? 8000 : 4000);
 });
 
-function projectIdFromHash(): string | null {
-  const m = location.hash.match(/^#\/p\/([a-f0-9]+)/);
-  return m ? m[1] : null;
+interface Route { pid: string; module?: string; designId?: number }
+
+/** #/p/{project}            terrain workspace
+ *  #/p/{project}/{module}/{designId}   design workspace (road, ...) */
+function routeFromHash(): Route | null {
+  const m = location.hash.match(/^#\/p\/([a-f0-9]+)(?:\/([a-z]+)\/(\d+))?/);
+  return m ? { pid: m[1], module: m[2] || undefined, designId: m[3] ? Number(m[3]) : undefined } : null;
+}
+
+function destroyCurrent(): void {
+  if (!current) return;
+  if (current.kind === "terrain") current.ws.destroy(); else current.inst.destroy();
+  current = null;
+}
+
+async function openRoute(r: Route): Promise<void> {
+  if (current && current.pid === r.pid) {
+    if (current.kind === "terrain" && !r.module) return;
+    if (current.kind === "design" && r.module && current.designId === r.designId) return;
+  }
+  destroyCurrent();
+  const p = await api.projects.get(r.pid);
+  if (r.module && r.designId !== undefined) {
+    const man = moduleById(r.module);
+    if (!man?.open) {
+      store.emit("toast", { text: `The ${man?.label ?? r.module} module is not available yet`, kind: "error" });
+      location.hash = terrainHash(r.pid);
+      return;
+    }
+    const design = await api.designs.get(r.pid, r.designId);
+    const inst = await man.open({ root, project: p, design });
+    current = { kind: "design", inst, pid: r.pid, designId: r.designId };
+    (window as any).__plm = inst;
+    return;
+  }
+  const ws = new Workspace(root, p, () => { destroyCurrent(); location.hash = ""; void showProjects(); });
+  current = { kind: "terrain", ws, pid: r.pid };
+  (window as any).__plm = ws; // debugging handle
+  await ws.init();
 }
 
 async function openProject(p: Project): Promise<void> {
-  location.hash = `#/p/${p.id}`;
-  workspace?.destroy();
-  workspace = new Workspace(root, p, () => { workspace?.destroy(); workspace = null; location.hash = ""; void showProjects(); });
-  (window as any).__plm = workspace; // debugging handle
-  await workspace.init();
+  if (location.hash !== terrainHash(p.id)) location.hash = terrainHash(p.id);
+  await openRoute({ pid: p.id });
 }
 
 async function showProjects(): Promise<void> {
@@ -48,10 +83,10 @@ async function boot(): Promise<void> {
     }
     throw e;
   }
-  const pid = projectIdFromHash();
-  if (pid) {
+  const r = routeFromHash();
+  if (r) {
     try {
-      await openProject(await api.projects.get(pid));
+      await openRoute(r);
       return;
     } catch { /* fall through */ }
   }
@@ -59,11 +94,9 @@ async function boot(): Promise<void> {
 }
 
 window.addEventListener("hashchange", () => {
-  const pid = projectIdFromHash();
-  if (!pid && workspace) { workspace.destroy(); workspace = null; void showProjects(); return; }
-  if (pid && (!workspace || workspace.project.id !== pid)) {
-    api.projects.get(pid).then((p) => openProject(p)).catch(() => void showProjects());
-  }
+  const r = routeFromHash();
+  if (!r) { if (current) { destroyCurrent(); void showProjects(); } return; }
+  openRoute(r).catch((e) => { store.emit("toast", { text: e instanceof ApiError ? e.detail : String(e), kind: "error" }); destroyCurrent(); void showProjects(); });
 });
 
 boot().catch((e) => {
