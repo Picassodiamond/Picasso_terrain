@@ -1,0 +1,1046 @@
+{
+  "id": "nrs-2070",
+  "name": "Nepal Road Standard 2070 (2013), Department of Roads",
+  "version": "NRS 2027 second revision 2070 (2013) - transcribed 2026-09-20 from Resource/Nepal Road Standard (NRS) 2070.pdf",
+  "meta": {
+    "status": "verified",
+    "note": "Values transcribed table by table from the printed NRS 2070 with clause / table references in each 'source'. Tables whose status is 'default' are application defaults where the standard gives no number (they are marked as such in the checks). cl. 2 b: requirements may be relaxed by the Government of Nepal in very difficult situations; cl. 7 b: the design speed may be reduced to 75 % in very difficult terrain.",
+    "classes": [
+      "I",
+      "II",
+      "III",
+      "IV"
+    ],
+    "class_labels": {
+      "I": "Class I - expressway, divided carriageway, > 20,000 PCU/day (20-year), 120 km/h in plain terrain",
+      "II": "Class II - arterial, 5,000 - 20,000 PCU/day, 100 km/h in plain terrain",
+      "III": "Class III - collector, 2,000 - 5,000 PCU/day, 80 km/h in plain terrain",
+      "IV": "Class IV - local, < 2,000 PCU/day, 60 km/h in plain terrain"
+    },
+    "class_correlation": "Table 3-1: National Highways are class I-II (plain / rolling) or II-III (mountainous / steep); Feeder Roads class II-III or III-IV",
+    "legacy_classes": {
+      "national": "II",
+      "feeder": "III",
+      "district": "IV",
+      "village": "IV"
+    },
+    "terrains": [
+      "plain",
+      "rolling",
+      "mountainous",
+      "steep"
+    ],
+    "terrain_labels": {
+      "plain": "Plain - cross slope 0-10 %",
+      "rolling": "Rolling - cross slope 10-25 %",
+      "mountainous": "Mountainous - cross slope 25-60 %",
+      "steep": "Steep - cross slope > 60 %"
+    },
+    "terrain_source": "Table 6-1 (percent cross slope of the country across the alignment)",
+    "road_types": [
+      "national_highway",
+      "feeder_road",
+      "district_road"
+    ],
+    "road_type_labels": {
+      "national_highway": "National Highway (H)",
+      "feeder_road": "Feeder Road (F)",
+      "district_road": "District Road"
+    },
+    "surfaces": [
+      "bituminous",
+      "concrete",
+      "gravel",
+      "earthen"
+    ],
+    "materials": [
+      "soil",
+      "disintegrated_rock",
+      "soft_rock",
+      "medium_rock",
+      "hard_rock"
+    ],
+    "material_labels": {
+      "soil": "Ordinary soil",
+      "disintegrated_rock": "Disintegrated rock or conglomerate",
+      "soft_rock": "Soft rock, shale",
+      "medium_rock": "Medium rock",
+      "hard_rock": "Hard rock"
+    },
+    "legacy_materials": {
+      "colluvium": "soil",
+      "weathered_rock": "disintegrated_rock",
+      "rock": "medium_rock"
+    },
+    "units": {
+      "speed": "km/h",
+      "length": "m",
+      "slope": "%"
+    },
+    "drain_soils": [
+      "sandy",
+      "clayey"
+    ]
+  },
+  "tables": {
+    "design_speed": {
+      "by": [
+        "road_class",
+        "terrain"
+      ],
+      "unit": "km/h",
+      "source": "NRS 2070 Table 7-1 Design speeds",
+      "status": "verified",
+      "note": "cl. 7 b: may be reduced to 75 % of the table value in very difficult terrain and unavoidable circumstances",
+      "values": {
+        "I": {
+          "plain": 120,
+          "rolling": 100,
+          "mountainous": 80,
+          "steep": 60
+        },
+        "II": {
+          "plain": 100,
+          "rolling": 80,
+          "mountainous": 60,
+          "steep": 40
+        },
+        "III": {
+          "plain": 80,
+          "rolling": 60,
+          "mountainous": 40,
+          "steep": 30
+        },
+        "IV": {
+          "plain": 60,
+          "rolling": 40,
+          "mountainous": 30,
+          "steep": 20
+        }
+      }
+    },
+    "stopping_sight_distance": {
+      "by": [
+        "design_speed"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 8-1 Stopping distance",
+      "status": "verified",
+      "interpolate": true,
+      "values": {
+        "20": 20,
+        "30": 30,
+        "40": 50,
+        "60": 80,
+        "80": 130,
+        "100": 190,
+        "120": 260
+      }
+    },
+    "overtaking_distance": {
+      "by": [
+        "design_speed"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 8-2 Overtaking distance",
+      "status": "verified",
+      "interpolate": true,
+      "values": {
+        "40": 165,
+        "60": 300,
+        "80": 470,
+        "100": 640,
+        "120": 880
+      }
+    },
+    "eye_height": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 8.3 d driver's eye height",
+      "status": "verified",
+      "values": {
+        "*": 1.2
+      }
+    },
+    "object_height": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 8.3 d object height",
+      "status": "verified",
+      "values": {
+        "*": 0.15
+      }
+    },
+    "min_radius": {
+      "by": [
+        "design_speed"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 9-1 minimum recommended radius when no superelevation is provided (2.5 % adverse camber); also Table 24-1",
+      "status": "verified",
+      "values": {
+        "20": 20,
+        "30": 30,
+        "40": 70,
+        "60": 200,
+        "80": 440,
+        "100": 870,
+        "120": 1730
+      }
+    },
+    "min_radius_absolute": {
+      "by": [
+        "design_speed"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 9-1 minimum radius with the maximum superelevation of 10 %",
+      "status": "verified",
+      "values": {
+        "20": 10,
+        "30": 20,
+        "40": 40,
+        "60": 110,
+        "80": 210,
+        "100": 370,
+        "120": 600
+      }
+    },
+    "min_radius_comfort": {
+      "by": [
+        "design_speed"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 9-1 radius from the passenger comfort criterion (lateral force 15 % of vertical), eq. 24-3 R = V^2/20",
+      "status": "verified",
+      "values": {
+        "20": 30,
+        "30": 50,
+        "40": 90,
+        "60": 190,
+        "80": 340,
+        "100": 530,
+        "120": 760
+      }
+    },
+    "side_friction": {
+      "by": [
+        "design_speed"
+      ],
+      "unit": "-",
+      "source": "NRS 2070 Table 24-4 coefficient of lateral friction",
+      "status": "verified",
+      "interpolate": true,
+      "values": {
+        "20": 0.33,
+        "30": 0.28,
+        "40": 0.23,
+        "60": 0.17,
+        "80": 0.14,
+        "100": 0.12,
+        "120": 0.09
+      }
+    },
+    "longitudinal_friction": {
+      "by": [
+        "design_speed"
+      ],
+      "unit": "-",
+      "source": "NRS 2070 Table 24-2 coefficient of longitudinal friction (stopping distance)",
+      "status": "verified",
+      "interpolate": true,
+      "values": {
+        "20": 0.4,
+        "30": 0.39,
+        "40": 0.39,
+        "60": 0.38,
+        "80": 0.36,
+        "100": 0.35,
+        "120": 0.34
+      }
+    },
+    "max_superelevation": {
+      "by": [
+        "terrain"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 cl. 11.6 b: 7 % in plain and rolling terrain, 10 % in hilly areas not bound by snow",
+      "status": "verified",
+      "note": "7 % in snow-bound areas (see max_superelevation_snow_bound); minimum superelevation equals the camber (cl. 11.6 c)",
+      "values": {
+        "plain": 7,
+        "rolling": 7,
+        "mountainous": 10,
+        "steep": 10
+      }
+    },
+    "max_superelevation_snow_bound": {
+      "by": [
+        "*"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 cl. 11.6 b: 7 % in snow bound areas",
+      "status": "verified",
+      "values": {
+        "*": 7
+      }
+    },
+    "superelevation_relative_gradient": {
+      "by": [
+        "terrain"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 cl. 11.6 e: outer edge not steeper than 1 in 150 (plain, rolling) or 1 in 60 (mountainous, steep) relative to the centre line",
+      "status": "verified",
+      "values": {
+        "plain": 0.667,
+        "rolling": 0.667,
+        "mountainous": 1.667,
+        "steep": 1.667
+      }
+    },
+    "transition_required_below_radius": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 9.2 b, c: all horizontal curves with radius below 1000 m are provided with clothoid transition curves",
+      "status": "verified",
+      "values": {
+        "*": 1000
+      }
+    },
+    "transition_shift_min": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 9.2 f and eq. 24-7: no transition is needed when the shift L^2 / (24 R) is below 0.25 m",
+      "status": "verified",
+      "values": {
+        "*": 0.25
+      }
+    },
+    "min_transition_length": {
+      "by": [
+        "radius"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 9-2 Length of transition curves (by radius); footnote: applicable when L <= R x deflection (eq. 24-5)",
+      "status": "verified",
+      "interpolate": true,
+      "values": {
+        "20": 20,
+        "30": 30,
+        "50": 35,
+        "60": 40,
+        "80": 45,
+        "100": 50,
+        "150": 60,
+        "200": 70,
+        "250": 80,
+        "300": 90,
+        "400": 100,
+        "500": 110,
+        "1000": 120
+      }
+    },
+    "transition_a_ratio_min": {
+      "by": [
+        "*"
+      ],
+      "unit": "-",
+      "source": "NRS 2070 cl. 19 d: clothoid parameter A = sqrt(R L) within 0.4 R and 1.4 R (aesthetics)",
+      "status": "verified",
+      "values": {
+        "*": 0.4
+      }
+    },
+    "transition_a_ratio_max": {
+      "by": [
+        "*"
+      ],
+      "unit": "-",
+      "source": "NRS 2070 cl. 19 d: clothoid parameter A = sqrt(R L) within 0.4 R and 1.4 R (aesthetics)",
+      "status": "verified",
+      "values": {
+        "*": 1.4
+      }
+    },
+    "transition_min_fraction_of_arc": {
+      "by": [
+        "*"
+      ],
+      "unit": "-",
+      "source": "NRS 2070 cl. 19 d: transition length not less than 1/4 of the circular curve length",
+      "status": "verified",
+      "values": {
+        "*": 0.25
+      }
+    },
+    "max_straight_length": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 19 g: maximum length of straight sections in plan 3-5 km",
+      "status": "verified",
+      "values": {
+        "*": 5000
+      }
+    },
+    "hairpin_deflection": {
+      "by": [
+        "*"
+      ],
+      "unit": "deg",
+      "source": "PLM rule: a curve reversing the direction of travel (deflection over 120 deg) is treated as a hair-pin bend (NRS 2070 cl. 9.3)",
+      "status": "default",
+      "values": {
+        "*": 120
+      }
+    },
+    "hairpin_min_speed": {
+      "by": [
+        "*"
+      ],
+      "unit": "km/h",
+      "source": "NRS 2070 Table 9-3 Hair pin bends: minimum design speed",
+      "status": "verified",
+      "values": {
+        "*": 20
+      }
+    },
+    "hairpin_min_radius": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 9-3 Hair pin bends: minimum radius of curvature",
+      "status": "verified",
+      "values": {
+        "*": 15
+      }
+    },
+    "hairpin_min_transition": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 9-3 Hair pin bends: minimum length of transition curve",
+      "status": "verified",
+      "values": {
+        "*": 15
+      }
+    },
+    "hairpin_max_gradient": {
+      "by": [
+        "*"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 Table 9-3 Hair pin bends: maximum longitudinal gradient",
+      "status": "verified",
+      "values": {
+        "*": 4
+      }
+    },
+    "hairpin_max_superelevation": {
+      "by": [
+        "*"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 Table 9-3 Hair pin bends: maximum superelevation",
+      "status": "verified",
+      "values": {
+        "*": 10
+      }
+    },
+    "hairpin_min_spacing": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 9.3 b: at least 60 m between successive hair pin bends",
+      "status": "verified",
+      "values": {
+        "*": 60
+      }
+    },
+    "extra_widening_single": {
+      "by": [
+        "radius"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 9-4 Extrawidening on curves, single lane road (radius up to 20 / 20-40 / 40-60 m; nil above 60 m)",
+      "status": "verified",
+      "lookup": "ceil",
+      "values": {
+        "20": 0.9,
+        "40": 0.6,
+        "60": 0.6,
+        "100": 0,
+        "300": 0,
+        "1e9": 0
+      }
+    },
+    "extra_widening_double": {
+      "by": [
+        "radius"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 9-4 Extrawidening on curves, double lane road",
+      "status": "verified",
+      "lookup": "ceil",
+      "values": {
+        "20": 1.5,
+        "40": 1.5,
+        "60": 1.2,
+        "100": 0.9,
+        "300": 0.6,
+        "1e9": 0
+      }
+    },
+    "extra_widening_per_lane_multi": {
+      "by": [
+        "radius"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 9-4 Extrawidening on curves, multi lane road (per lane)",
+      "status": "verified",
+      "lookup": "ceil",
+      "values": {
+        "20": 0.75,
+        "40": 0.75,
+        "60": 0.6,
+        "100": 0.45,
+        "300": 0.3,
+        "1e9": 0
+      }
+    },
+    "max_gradient": {
+      "by": [
+        "design_speed"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 Table 10-1 Maximum gradients (trucks 120 kg/kW, 25 km/h speed reduction)",
+      "status": "verified",
+      "interpolate": true,
+      "note": "cl. 10.1.2 a: eased by 0.5 % for each 500 m of altitude above mean sea level; cl. 10.1.2 b: eased on curves by (30 + R) / R %, at most 75 / R %, for gradients above 4 %",
+      "values": {
+        "20": 12,
+        "30": 10,
+        "40": 9,
+        "60": 7,
+        "80": 6,
+        "100": 5,
+        "120": 4
+      }
+    },
+    "gradient_altitude_easing": {
+      "by": [
+        "*"
+      ],
+      "unit": "% per 500 m",
+      "source": "NRS 2070 cl. 10.1.2 a grade compensation for altitude",
+      "status": "verified",
+      "values": {
+        "*": 0.5
+      }
+    },
+    "grade_compensation_threshold": {
+      "by": [
+        "*"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 cl. 10.1.2 c: grades below 4 % need no compensation",
+      "status": "verified",
+      "values": {
+        "*": 4
+      }
+    },
+    "gradient_critical_length": {
+      "by": [
+        "gradient"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 10-2 Maximum (critical) length of gradient",
+      "status": "verified",
+      "interpolate": true,
+      "values": {
+        "4": 600,
+        "5": 450,
+        "6": 400,
+        "7": 300,
+        "9": 200,
+        "10": 150,
+        "12": 150
+      }
+    },
+    "min_gradient_drainage": {
+      "by": [
+        "*"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 cl. 10.1.1 e: minimum longitudinal gradient for drainage 0.5 %",
+      "status": "verified",
+      "values": {
+        "*": 0.5
+      }
+    },
+    "min_k_crest": {
+      "by": [
+        "design_speed"
+      ],
+      "unit": "m/%",
+      "source": "NRS 2070 Table 10-3 Minimum K for summit curves",
+      "status": "verified",
+      "interpolate": true,
+      "values": {
+        "20": 2,
+        "30": 4,
+        "40": 29,
+        "60": 94,
+        "80": 231,
+        "100": 427,
+        "120": 807
+      }
+    },
+    "min_k_sag": {
+      "by": [
+        "design_speed"
+      ],
+      "unit": "m/%",
+      "source": "NRS 2070 Table 10-4 Minimum K for valley curves",
+      "status": "verified",
+      "interpolate": true,
+      "values": {
+        "20": 3,
+        "30": 6,
+        "40": 17,
+        "60": 42,
+        "80": 111,
+        "100": 236,
+        "120": 441
+      }
+    },
+    "min_vertical_curve_length": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "PLM default: NRS 2070 governs vertical curves by K (L = K x A, cl. 10.4 e) and gives no separate minimum length",
+      "status": "default",
+      "values": {
+        "*": 30
+      }
+    },
+    "lanes": {
+      "by": [
+        "road_class"
+      ],
+      "unit": "-",
+      "source": "NRS 2070 Table 24-1 number of lanes (I: 4 min., II: >= 2, III: 2, IV: < 2)",
+      "status": "verified",
+      "values": {
+        "I": 4,
+        "II": 2,
+        "III": 2,
+        "IV": 1
+      }
+    },
+    "lane_width": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 11-1 multilane pavement width per lane",
+      "status": "verified",
+      "values": {
+        "*": 3.5
+      }
+    },
+    "carriageway_width": {
+      "by": [
+        "road_class"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 11-1 and Table 24-1: 3.5 m per lane; class IV single lane 3.75 m (3.0 m in difficult terrain) or 5.5 m intermediate lane",
+      "status": "verified",
+      "note": "class IV: the single-lane carriageway should have treated shoulders to a total treated width of 5.5 m (cl. 11.1 b)",
+      "values": {
+        "I": 14.0,
+        "II": 7.0,
+        "III": 7.0,
+        "IV": 3.75
+      }
+    },
+    "carriageway_width_intermediate": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 11-1 intermediate lane road",
+      "status": "verified",
+      "values": {
+        "*": 5.5
+      }
+    },
+    "shoulder_width": {
+      "by": [
+        "road_class",
+        "terrain"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 11-2 and Table 24-1 minimum shoulder width (reduced in mountainous and steep terrain, cl. 11.2 d)",
+      "status": "verified",
+      "values": {
+        "I": {
+          "plain": 3.75,
+          "rolling": 3.75,
+          "mountainous": 2.5,
+          "steep": 2.5
+        },
+        "II": {
+          "plain": 2.5,
+          "rolling": 2.5,
+          "mountainous": 2.0,
+          "steep": 2.0
+        },
+        "III": {
+          "plain": 2.0,
+          "rolling": 2.0,
+          "mountainous": 1.0,
+          "steep": 1.0
+        },
+        "IV": {
+          "plain": 1.5,
+          "rolling": 1.5,
+          "mountainous": 0.75,
+          "steep": 0.75
+        }
+      }
+    },
+    "shoulder_min_width": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 11.2 a: shoulders at least 0.75 m on either side",
+      "status": "verified",
+      "values": {
+        "*": 0.75
+      }
+    },
+    "shoulder_crossfall_extra": {
+      "by": [
+        "*"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 cl. 11.5 d: shoulder crossfall 0.5 % steeper than the carriageway",
+      "status": "verified",
+      "values": {
+        "*": 0.5
+      }
+    },
+    "camber": {
+      "by": [
+        "surface"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 Table 11-3 Camber (cement concrete 1.5-2.0, bituminous 2.5, gravel 4.0, earthen 5.0)",
+      "status": "verified",
+      "values": {
+        "concrete": 2.0,
+        "bituminous": 2.5,
+        "gravel": 4.0,
+        "earthen": 5.0
+      }
+    },
+    "median_width": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 11.3 b: median 5 m recommended, 3 m where land is restricted",
+      "status": "verified",
+      "values": {
+        "*": 5.0
+      }
+    },
+    "right_of_way": {
+      "by": [
+        "road_type"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 11-6 Right of way (total width): Highways 50, Feeder Roads 30, District Roads 20",
+      "status": "verified",
+      "values": {
+        "national_highway": 50,
+        "feeder_road": 30,
+        "district_road": 20
+      }
+    },
+    "vertical_clearance": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 11.9.3 e: 5.0 m over the whole roadway width",
+      "status": "verified",
+      "values": {
+        "*": 5.0
+      }
+    },
+    "fill_slope": {
+      "by": [
+        "fill_height"
+      ],
+      "unit": "h:v",
+      "source": "NRS 2070 Table 11-4 Embankment side slopes (1:4 below 1.5 m, 1:3 to 3.0 m, 1:2.5 to 4.5 m, 1:2 to 12 m; above 12 m designed specially)",
+      "status": "verified",
+      "lookup": "ceil",
+      "values": {
+        "1.5": 4.0,
+        "3": 3.0,
+        "4.5": 2.5,
+        "12": 2.0,
+        "1e9": 2.0
+      }
+    },
+    "max_fill_height": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 Table 11-4: embankments higher than 12 m are designed specially",
+      "status": "verified",
+      "values": {
+        "*": 12
+      }
+    },
+    "embankment_step_min_width": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 11.7 c: on natural cross slopes steeper than 1:5 the ground is cut in horizontal steps wider than 2 m",
+      "status": "verified",
+      "values": {
+        "*": 2.0
+      }
+    },
+    "embankment_step_cross_slope": {
+      "by": [
+        "*"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 cl. 11.7 c: benching under fills required above a 1:5 (20 %) cross slope",
+      "status": "verified",
+      "values": {
+        "*": 20
+      }
+    },
+    "cut_slope": {
+      "by": [
+        "material"
+      ],
+      "unit": "h:v",
+      "source": "NRS 2070 Table 11-5 Cuttings side slopes, steepest of the recommended range (ordinary soil 1:2 to 1:1; disintegrated rock 1:1/2 to 1:1/4; soft rock, shale 1:1/4 to 1:1/8; medium rock 1:1/12 to 1:1/16; hard rock almost vertical)",
+      "status": "verified",
+      "values": {
+        "soil": 1.0,
+        "disintegrated_rock": 0.25,
+        "soft_rock": 0.125,
+        "medium_rock": 0.0625,
+        "hard_rock": 0.02
+      }
+    },
+    "cut_slope_flat": {
+      "by": [
+        "material"
+      ],
+      "unit": "h:v",
+      "source": "NRS 2070 Table 11-5 Cuttings side slopes, flattest of the recommended range",
+      "status": "verified",
+      "values": {
+        "soil": 2.0,
+        "disintegrated_rock": 0.5,
+        "soft_rock": 0.25,
+        "medium_rock": 0.0833,
+        "hard_rock": 0.02
+      }
+    },
+    "bench_height": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "PLM default: NRS 2070 does not specify berms in cut slopes",
+      "status": "default",
+      "values": {
+        "*": 6.0
+      }
+    },
+    "bench_width": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "PLM default: NRS 2070 does not specify berms in cut slopes",
+      "status": "default",
+      "values": {
+        "*": 1.5
+      }
+    },
+    "max_fill_height_without_wall": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "PLM project rule (NRS 2070 cl. 17.2: retaining walls where fills on steep cross slopes are high): fills above this suggest a retaining wall",
+      "status": "default",
+      "values": {
+        "*": 6.0
+      }
+    },
+    "max_cut_depth_without_wall": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "PLM project rule: cuts deeper than this suggest a breast wall",
+      "status": "default",
+      "values": {
+        "*": 8.0
+      }
+    },
+    "drain_min_gradient": {
+      "by": [
+        "*"
+      ],
+      "unit": "%",
+      "source": "NRS 2070 cl. 13.8 f: side drains with at least 0.5 % longitudinal grade",
+      "status": "verified",
+      "values": {
+        "*": 0.5
+      }
+    },
+    "drain_outlet_max_spacing": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 13.8 i: outlets from side drains at no more than 500 m intervals",
+      "status": "verified",
+      "values": {
+        "*": 500
+      }
+    },
+    "catch_drain_min_offset": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 13.8 d: catch water drains at least 5 m behind the top of the cut",
+      "status": "verified",
+      "values": {
+        "*": 5.0
+      }
+    },
+    "toe_drain_max_fill": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 13.8 c: toe-of-slope drains in low fills below 0.8 m",
+      "status": "verified",
+      "values": {
+        "*": 0.8
+      }
+    },
+    "design_return_period": {
+      "by": [
+        "road_class"
+      ],
+      "unit": "years",
+      "source": "NRS 2070 Table 13-2 return periods for side drain discharges",
+      "status": "verified",
+      "values": {
+        "I": 50,
+        "II": 50,
+        "III": 33,
+        "IV": 25
+      }
+    },
+    "culvert_max_length": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 17.1 a: cross drainage structures longer than 6 m are bridges (Nepal Bridge Standards 2067)",
+      "status": "verified",
+      "values": {
+        "*": 6.0
+      }
+    },
+    "climbing_lane_min_width": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "source": "NRS 2070 cl. 10.2 e: climbing lanes at least 3.5 m wide",
+      "status": "verified",
+      "values": {
+        "*": 3.5
+      }
+    },
+    "drain_turf_min_gradient": {
+      "by": [
+        "drain_soil"
+      ],
+      "unit": "%",
+      "status": "verified",
+      "source": "NRS 2070 Table 13-3: no lining below 1 % in sandy soil and below 2 % in clayey soil; grass turfing above that",
+      "values": {
+        "sandy": 1,
+        "clayey": 2
+      }
+    },
+    "drain_hard_lining_min_gradient": {
+      "by": [
+        "*"
+      ],
+      "unit": "%",
+      "status": "verified",
+      "source": "NRS 2070 Table 13-3: stone rip-rap, masonry or concrete lining from 3 % to 5 %",
+      "values": {
+        "*": 3
+      }
+    },
+    "drain_stepped_min_gradient": {
+      "by": [
+        "*"
+      ],
+      "unit": "%",
+      "status": "verified",
+      "source": "NRS 2070 Table 13-3: stepping above 5 %",
+      "values": {
+        "*": 5
+      }
+    },
+    "subsurface_water_table_depth": {
+      "by": [
+        "*"
+      ],
+      "unit": "m",
+      "status": "verified",
+      "source": "NRS 2070 cl. 13.8 subsurface drainage a: water table kept 1.0 to 1.2 m below the subgrade",
+      "values": {
+        "*": 1.2
+      }
+    }
+  }
+}

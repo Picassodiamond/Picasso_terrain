@@ -1,9 +1,15 @@
-"""Horizontal road alignment: intersection points (IPs) with circular curves.
+"""Horizontal road alignment: intersection points (IPs) with circular curves and optional
+symmetric transition (clothoid) spirals.
 
 Unifies the three legacy copies of the IP geometry (`ACAD_FinalAlignment.cls`,
-`FrmGenerateProCro.frm`, `ProCroToDtm.frm`): whole-circle bearing, deflection, tangent length
-T = R tan(D/2), curve length L = R D, BC/EC chainages, curve centre and the stationing function
-`point_at(chainage)`.
+`FrmGenerateProCro.frm`, `ProCroToDtm.frm`, and ` Road` `ALIGNMENT.CalculateAll`): whole-circle
+bearing, deflection, tangent length T = R tan(D/2), curve length L = R D, BC/EC chainages, curve
+centre and the stationing function `point_at(chainage)`.
+
+With a transition length Ls at an IP the curve becomes TS - spiral - SC - arc - CS - spiral - ST:
+spiral angle th = Ls / 2R, shift p and tangent offset k from the clothoid end point, total tangent
+Ts = (R + p) tan(D/2) + k, arc angle D - 2 th. Clothoid coordinates use the standard series in the
+spiral angle, exact to well below a millimetre for road spirals (th < 0.5 rad).
 
 Conventions: coordinates are (easting, northing); directions are mathematical angles in radians
 (counter-clockwise from +X); `deflection` is signed, positive = left turn (counter-clockwise).
@@ -45,6 +51,16 @@ class IP:
     y: float
     radius: float = 0.0
     label: str = ""
+    transition: float = 0.0   # symmetric spiral length Ls (0 = simple circular curve)
+
+
+def clothoid_xy(length: float, theta: float) -> tuple[float, float]:
+    """Local coordinates of a clothoid point at arc length `length` whose tangent has turned by
+    `theta` radians (theta = l^2 / (2 R Ls)). Series in theta, valid for theta < ~1 rad."""
+    t2 = theta * theta
+    x = length * (1 - t2 / 10 + t2 * t2 / 216 - t2 * t2 * t2 / 9360)
+    y = length * (theta / 3 - theta * t2 / 42 + theta * t2 * t2 / 1320 - theta * t2 * t2 * t2 / 75600)
+    return x, y
 
 
 @dataclass
@@ -60,30 +76,38 @@ class IPGeometry:
     direction_in: float      # direction of the incoming tangent
     direction_out: float     # direction of the outgoing tangent
     deflection: float        # signed, + left
-    tangent_length: float    # T
-    curve_length: float      # L
+    tangent_length: float    # T (total, including spiral tangent offset when transitions exist)
+    curve_length: float      # L of the circular arc
     external: float          # E
-    bc_chainage: float
+    bc_chainage: float       # TS when the curve has transitions
     mc_chainage: float
-    ec_chainage: float
+    ec_chainage: float       # ST when the curve has transitions
     bc: tuple[float, float]
     ec: tuple[float, float]
     centre: tuple[float, float] | None
     valid: bool = True
     message: str = ""
+    transition: float = 0.0        # spiral length Ls (each side)
+    spiral_angle: float = 0.0      # th = Ls / 2R (radians)
+    shift: float = 0.0             # p
+    sc_chainage: float | None = None
+    cs_chainage: float | None = None
+    total_length: float = 0.0      # 2 Ls + L
 
 
 @dataclass
 class Element:
-    kind: str                 # 'tangent' | 'curve'
+    kind: str                 # 'tangent' | 'curve' | 'spiral'
     start_chainage: float
     end_chainage: float
     start: tuple[float, float]
     end: tuple[float, float]
-    radius: float = 0.0       # curves only
+    radius: float = 0.0       # curves / spiral end radius
     centre: tuple[float, float] | None = None
-    deflection: float = 0.0   # signed
+    deflection: float = 0.0   # signed (curve); sign of the turn for spirals
     ip_index: int | None = None
+    spiral_in: bool = True    # spirals: True = curvature increasing (TS -> SC), False = decreasing (CS -> ST)
+    direction_start: float = 0.0  # spirals: tangent direction at the start (entry) or end (exit)
 
     @property
     def length(self) -> float:
@@ -103,7 +127,7 @@ class HorizontalAlignment:
     def __init__(self, ips: Sequence[IP], start_chainage: float = 0.0, min_radius: float = 4.0):
         if len(ips) < 2:
             raise ValueError("an alignment needs at least two IPs")
-        self.ips: list[IP] = [IP(float(p.x), float(p.y), float(p.radius or 0.0), str(p.label or "")) for p in ips]
+        self.ips: list[IP] = [IP(float(p.x), float(p.y), float(p.radius or 0.0), str(p.label or ""), float(getattr(p, "transition", 0.0) or 0.0)) for p in ips]
         self.start_chainage = float(start_chainage)
         self.min_radius = float(min_radius)
         self.issues: list[AlignmentIssue] = []
@@ -114,8 +138,10 @@ class HorizontalAlignment:
     # ------------------------------------------------------------------ construction
     @classmethod
     def from_rows(cls, rows: Iterable[Sequence], start_chainage: float = 0.0) -> "HorizontalAlignment":
-        """rows of (label, x, y, r) - legacy `*_aln.csv` body."""
-        ips = [IP(float(r[1]), float(r[2]), float(r[3]) if len(r) > 3 and r[3] not in ("", None) else 0.0, str(r[0])) for r in rows]
+        """rows of (label, x, y, r[, transition]) - legacy `*_aln.csv` body; the fifth column is the
+        spiral length written by the  Road program."""
+        ips = [IP(float(r[1]), float(r[2]), float(r[3]) if len(r) > 3 and r[3] not in ("", None) else 0.0, str(r[0]),
+                  float(r[4]) if len(r) > 4 and r[4] not in ("", None) else 0.0) for r in rows]
         return cls(ips, start_chainage)
 
     @classmethod
@@ -168,12 +194,17 @@ class HorizontalAlignment:
         dirs = np.arctan2(seg[:, 1], seg[:, 0])  # direction of tangent i (IP i -> IP i+1)
 
         # per-IP curve quantities
-        T = np.zeros(n)
-        Lc = np.zeros(n)
+        T = np.zeros(n)          # total tangent length TS/ST -> IP
+        Lc = np.zeros(n)         # circular arc length
         E = np.zeros(n)
         defl = np.zeros(n)
-        bc = xy.copy()
-        ec = xy.copy()
+        Ls = np.zeros(n)         # spiral length actually used
+        theta = np.zeros(n)      # spiral angle
+        shift = np.zeros(n)
+        bc = xy.copy()           # TS (or BC)
+        ec = xy.copy()           # ST (or EC)
+        sc = xy.copy()           # spiral-to-curve
+        cs = xy.copy()           # curve-to-spiral
         centre: list[tuple[float, float] | None] = [None] * n
         for i in range(1, n - 1):
             r = ips[i].radius
@@ -188,13 +219,39 @@ class HorizontalAlignment:
                 continue  # collinear: no curve
             sgn = 1.0 if cross > 0 else -1.0
             defl[i] = sgn * d
-            T[i] = r * np.tan(d / 2.0)
-            Lc[i] = r * d
-            E[i] = r / np.cos(d / 2.0) - r
+            ls = float(ips[i].transition or 0.0)
+            th = ls / (2.0 * r) if ls > 0 else 0.0
+            if ls > 0 and 2.0 * th > d + 1e-12:
+                self.issues.append(AlignmentIssue(i, "transition",
+                    f"IP {ips[i].label}: transitions of {ls:g} m need 2 x {np.degrees(th):.2f} deg but the deflection is only {np.degrees(d):.2f} deg; using a simple circular curve"))
+                ls = th = 0.0
+            if ls > 0:
+                xs, ys = clothoid_xy(ls, th)
+                p_shift = ys - r * (1.0 - np.cos(th))
+                k = xs - r * np.sin(th)
+                T[i] = (r + p_shift) * np.tan(d / 2.0) + k
+                Lc[i] = r * (d - 2.0 * th)
+                E[i] = (r + p_shift) / np.cos(d / 2.0) - r
+                Ls[i], theta[i], shift[i] = ls, th, p_shift
+            else:
+                T[i] = r * np.tan(d / 2.0)
+                Lc[i] = r * d
+                E[i] = r / np.cos(d / 2.0) - r
             bc[i] = xy[i] - u1 * T[i]
             ec[i] = xy[i] + u2 * T[i]
-            nrm = np.array([-u1[1], u1[0]]) * sgn  # towards the centre
-            c = bc[i] + nrm * r
+            n1 = np.array([-u1[1], u1[0]]) * sgn  # left/right normal towards the centre side, incoming
+            n2 = np.array([-u2[1], u2[0]]) * sgn
+            if ls > 0:
+                sc[i] = bc[i] + u1 * xs + n1 * ys
+                cs[i] = ec[i] - u2 * xs + n2 * ys
+                # centre: from SC along the normal of the direction at SC (turned by th)
+                d_sc = np.arctan2(u1[1], u1[0]) + sgn * th
+                nc = np.array([-np.sin(d_sc), np.cos(d_sc)]) * sgn
+                c = sc[i] + nc * r
+            else:
+                sc[i] = bc[i]
+                cs[i] = ec[i]
+                c = bc[i] + n1 * r
             centre[i] = (float(c[0]), float(c[1]))
             if r < self.min_radius:
                 self.issues.append(AlignmentIssue(i, "min_radius", f"IP {ips[i].label}: radius {r:g} < minimum {self.min_radius:g}"))
@@ -219,9 +276,12 @@ class HorizontalAlignment:
         for i in range(1, n):
             tangent = seg_len[i - 1] - T[i - 1] - T[i]
             bc_ch[i] = ec_ch[i - 1] + max(tangent, 0.0)
-            ec_ch[i] = bc_ch[i] + Lc[i]
+            ec_ch[i] = bc_ch[i] + 2.0 * Ls[i] + Lc[i]
+        sc_ch = bc_ch + Ls
+        cs_ch = ec_ch - Ls
         self._bc_ch, self._ec_ch, self._T, self._L, self._defl = bc_ch, ec_ch, T, Lc, defl
         self._bc, self._ec, self._centre = bc, ec, centre
+        self._Ls, self._theta, self._sc, self._cs, self._sc_ch, self._cs_ch = Ls, theta, sc, cs, sc_ch, cs_ch
         self._dirs = dirs
 
         self.geometry = []
@@ -232,10 +292,13 @@ class HorizontalAlignment:
                 index=i, label=ips[i].label, x=ips[i].x, y=ips[i].y, radius=ips[i].radius,
                 chainage=float(ip_ch[i]), direction_in=din, direction_out=dout,
                 deflection=float(defl[i]), tangent_length=float(T[i]), curve_length=float(Lc[i]),
-                external=float(E[i]), bc_chainage=float(bc_ch[i]), mc_chainage=float(bc_ch[i] + Lc[i] / 2),
+                external=float(E[i]), bc_chainage=float(bc_ch[i]), mc_chainage=float((bc_ch[i] + ec_ch[i]) / 2),
                 ec_chainage=float(ec_ch[i]), bc=(float(bc[i, 0]), float(bc[i, 1])),
                 ec=(float(ec[i, 0]), float(ec[i, 1])), centre=centre[i], valid=bool(valid[i]),
                 message="" if valid[i] else "curve does not fit between adjacent IPs",
+                transition=float(Ls[i]), spiral_angle=float(theta[i]), shift=float(shift[i]),
+                sc_chainage=float(sc_ch[i]) if Ls[i] > 0 else None, cs_chainage=float(cs_ch[i]) if Ls[i] > 0 else None,
+                total_length=float(2 * Ls[i] + Lc[i]),
             ))
 
         # elements
@@ -246,11 +309,25 @@ class HorizontalAlignment:
             s_ch, e_ch = ec_ch[i], bc_ch[i + 1]
             if e_ch - s_ch > 1e-9:
                 els.append(Element("tangent", float(s_ch), float(e_ch), (float(s[0]), float(s[1])), (float(e[0]), float(e[1]))))
-            if i + 1 < n - 1 and Lc[i + 1] > 0:
+            if i + 1 < n - 1 and (Lc[i + 1] > 0 or Ls[i + 1] > 0):
                 k = i + 1
-                els.append(Element("curve", float(bc_ch[k]), float(ec_ch[k]),
-                                   (float(bc[k, 0]), float(bc[k, 1])), (float(ec[k, 0]), float(ec[k, 1])),
-                                   radius=ips[k].radius, centre=centre[k], deflection=float(defl[k]), ip_index=k))
+                if Ls[k] > 0:
+                    d_in = float(dirs[k - 1])
+                    d_out = float(dirs[k])
+                    els.append(Element("spiral", float(bc_ch[k]), float(sc_ch[k]), (float(bc[k, 0]), float(bc[k, 1])),
+                                       (float(sc[k, 0]), float(sc[k, 1])), radius=ips[k].radius, deflection=float(defl[k]),
+                                       ip_index=k, spiral_in=True, direction_start=d_in))
+                    if Lc[k] > 1e-9:
+                        els.append(Element("curve", float(sc_ch[k]), float(cs_ch[k]), (float(sc[k, 0]), float(sc[k, 1])),
+                                           (float(cs[k, 0]), float(cs[k, 1])), radius=ips[k].radius, centre=centre[k],
+                                           deflection=float(defl[k]), ip_index=k))
+                    els.append(Element("spiral", float(cs_ch[k]), float(ec_ch[k]), (float(cs[k, 0]), float(cs[k, 1])),
+                                       (float(ec[k, 0]), float(ec[k, 1])), radius=ips[k].radius, deflection=float(defl[k]),
+                                       ip_index=k, spiral_in=False, direction_start=d_out))
+                else:
+                    els.append(Element("curve", float(bc_ch[k]), float(ec_ch[k]),
+                                       (float(bc[k, 0]), float(bc[k, 1])), (float(ec[k, 0]), float(ec[k, 1])),
+                                       radius=ips[k].radius, centre=centre[k], deflection=float(defl[k]), ip_index=k))
         self.elements = els
 
     # ------------------------------------------------------------------ properties
@@ -287,6 +364,30 @@ class HorizontalAlignment:
             d = np.arctan2(dy, dx) if L > 0 else self._dirs[0]
             t = (ch - el.start_chainage) / L if L > 0 else 0.0
             return el.start[0] + t * dx, el.start[1] + t * dy, float(d)
+        if el.kind == "spiral":
+            ls = el.length
+            r = el.radius
+            sgn = 1.0 if el.deflection > 0 else -1.0
+            if el.spiral_in:
+                l = float(np.clip(ch - el.start_chainage, 0.0, ls))
+                th = l * l / (2.0 * r * ls) if ls > 0 else 0.0
+                x, y = clothoid_xy(l, th)
+                d0 = el.direction_start
+                ex, ey = np.cos(d0), np.sin(d0)
+                px = el.start[0] + x * ex + sgn * y * (-ey)
+                py = el.start[1] + x * ey + sgn * y * ex
+                d = d0 + sgn * th
+            else:
+                # traverse the exit spiral backwards from ST, where the curvature is zero
+                l = float(np.clip(el.end_chainage - ch, 0.0, ls))
+                th = l * l / (2.0 * r * ls) if ls > 0 else 0.0
+                x, y = clothoid_xy(l, th)
+                d1 = el.direction_start  # direction of travel at ST
+                ex, ey = np.cos(d1), np.sin(d1)
+                px = el.end[0] - x * ex + sgn * y * (-ey)
+                py = el.end[1] - x * ey + sgn * y * ex
+                d = d1 - sgn * th
+            return float(px), float(py), float(np.arctan2(np.sin(d), np.cos(d)))
         cx, cy = el.centre  # type: ignore[misc]
         r = el.radius
         a0 = np.arctan2(el.start[1] - cy, el.start[0] - cx)
@@ -319,8 +420,10 @@ class HorizontalAlignment:
             ch.extend(np.arange(first, s1 - tol, interval).tolist())
         if include_curve_points:
             for g in self.geometry:
-                if g.curve_length > 0 and g.valid:
+                if g.total_length > 0 and g.valid:
                     ch.extend([g.bc_chainage, g.mc_chainage, g.ec_chainage])
+                    if g.sc_chainage is not None and g.cs_chainage is not None:
+                        ch.extend([g.sc_chainage, g.cs_chainage])
         ch.extend(float(c) for c in extra if s0 - tol <= float(c) <= s1 + tol)
         ch = np.array(sorted(ch))
         keep = np.r_[True, np.diff(ch) > tol]
@@ -335,7 +438,7 @@ class HorizontalAlignment:
                 n = max(1, int(np.ceil(el.length / max_segment)))
             else:
                 step_len = max_segment
-                step_ang = np.radians(max_angle_deg) * el.radius
+                step_ang = np.radians(max_angle_deg) * el.radius  # spirals: use the tightest (end) radius
                 n = max(2, int(np.ceil(el.length / min(step_len, step_ang))))
             for k in range(n):
                 c = el.start_chainage + el.length * k / n
@@ -356,8 +459,15 @@ class HorizontalAlignment:
         for el in self.elements:
             if el.kind == "tangent":
                 out.append((el.start[0], el.start[1], 0.0))
+            elif el.kind == "spiral":
+                # DXF has no clothoid entity: approximate with short chords
+                n = max(2, int(np.ceil(el.length / 2.0)))
+                for k in range(n):
+                    x, y, _ = self.point_and_direction(el.start_chainage + el.length * k / n)
+                    out.append((x, y, 0.0))
             else:
-                out.append((el.start[0], el.start[1], float(np.tan(el.deflection / 4.0))))
+                arc_defl = el.length / el.radius * (1.0 if el.deflection > 0 else -1.0)
+                out.append((el.start[0], el.start[1], float(np.tan(arc_defl / 4.0))))
         if self.elements:
             e = self.elements[-1].end
             out.append((e[0], e[1], 0.0))
@@ -381,20 +491,31 @@ class HorizontalAlignment:
         for g in self.geometry:
             out.append({"kind": "IP", "index": g.index, "label": g.label, "x": g.x, "y": g.y,
                         "chainage": g.chainage, "radius": g.radius, "valid": g.valid})
-            if g.curve_length > 0:
+            if g.total_length > 0:
                 mx, my = self.point_at(g.mc_chainage) if g.valid else (g.x, g.y)
-                out.append({"kind": "BC", "index": g.index, "x": g.bc[0], "y": g.bc[1], "chainage": g.bc_chainage})
-                out.append({"kind": "MC", "index": g.index, "x": mx, "y": my, "chainage": g.mc_chainage})
-                out.append({"kind": "EC", "index": g.index, "x": g.ec[0], "y": g.ec[1], "chainage": g.ec_chainage})
+                out.append({"kind": "TS" if g.transition else "BC", "index": g.index, "x": g.bc[0], "y": g.bc[1], "chainage": g.bc_chainage})
+                if g.transition and g.sc_chainage is not None and g.cs_chainage is not None:
+                    sx, sy = self.point_at(g.sc_chainage)
+                    cx2, cy2 = self.point_at(g.cs_chainage)
+                    out.append({"kind": "SC", "index": g.index, "x": sx, "y": sy, "chainage": g.sc_chainage})
+                    out.append({"kind": "MC", "index": g.index, "x": mx, "y": my, "chainage": g.mc_chainage})
+                    out.append({"kind": "CS", "index": g.index, "x": cx2, "y": cy2, "chainage": g.cs_chainage})
+                else:
+                    out.append({"kind": "MC", "index": g.index, "x": mx, "y": my, "chainage": g.mc_chainage})
+                out.append({"kind": "ST" if g.transition else "EC", "index": g.index, "x": g.ec[0], "y": g.ec[1], "chainage": g.ec_chainage})
         return out
 
     def to_rows(self) -> list[tuple[str, float, float, float]]:
         return [(p.label, p.x, p.y, p.radius) for p in self.ips]
 
     def to_aln_csv(self) -> str:
-        """Legacy `Alignment.swr` / `*_aln.csv`: `count,startCh` then `N,X,Y,R` rows."""
+        """Legacy `Alignment.swr` / `*_aln.csv`: `count,startCh` then `N,X,Y,R` rows; a fifth column
+        (spiral length) is written only when transitions are used ( Road layout)."""
         lines = [f"{len(self.ips) - 1},{self.start_chainage:g}"]
-        lines += [f"{p.label},{p.x:.3f},{p.y:.3f},{p.radius:g}" for p in self.ips]
+        if any(p.transition for p in self.ips):
+            lines += [f"{p.label},{p.x:.3f},{p.y:.3f},{p.radius:g},{p.transition:g}" for p in self.ips]
+        else:
+            lines += [f"{p.label},{p.x:.3f},{p.y:.3f},{p.radius:g}" for p in self.ips]
         return "\n".join(lines) + "\n"
 
     @classmethod

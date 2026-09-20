@@ -148,6 +148,7 @@ export class Workspace {
       el("span", { class: "muted" }, "Height"), heightSel,
       button("Zoom to data", () => this.zoomToData(), "btn small"),
       button("Top", () => this.mv.lookDown(), "btn small"),
+      button("Help", () => window.open("/help/terrain.html", "_blank"), "btn small"),
       chartsBtn,
       user?.authenticated ? el("span", { class: "muted" }, user.username) : null,
       user?.authenticated ? button("Sign out", async () => { await api.auth.logout(); location.hash = ""; location.reload(); }, "btn small") : null,

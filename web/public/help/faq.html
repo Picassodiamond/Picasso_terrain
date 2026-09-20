@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting - Picasso LandMesh help</title>
+<link rel="stylesheet" href="help.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='2,28 12,6 20,18 26,10 30,28' fill='%23f59e0b'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html"><span>▲</span> Picasso LandMesh · Help</a>
+  <nav>
+    <a href="index.html">Getting started</a>
+    <a href="terrain.html">Terrain module</a>
+    <a href="road.html">Road design</a>
+    <a href="standards.html">Standards &amp; checks</a>
+    <a href="accounts.html">Accounts &amp; sharing</a>
+    <a class="active" href="faq.html">Troubleshooting</a>
+  </nav>
+  <a class="app" href="/">Open the app</a>
+</header>
+
+<div class="wrap">
+<aside class="toc">
+  <h4>On this page</h4>
+  <a href="#map">Map and data</a>
+  <a href="#tin">Terrain model and contours</a>
+  <a href="#road">Road design</a>
+  <a href="#output">Drawings and exports</a>
+  <a href="#accounts">Accounts and server</a>
+  <a href="#browser">Browser and performance</a>
+</aside>
+
+<main>
+<h1>Troubleshooting</h1>
+<p class="lead">Messages you may meet, what they mean and what to do.</p>
+
+<h2 id="map">Map and data</h2>
+<h3>The base map is greyed out</h3>
+<p>The project uses a local grid, so it has no position on the Earth. Under <b>Settings</b> either assign the real coordinate system (MUTM or UTM zone) or enter the longitude and latitude of one known survey point with its local easting and northing to place the grid on the map.</p>
+<h3>My points are missing or appear in the wrong place</h3>
+<p>Check the column mapping during import (easting and northing may be swapped) and the project coordinate system. All data in a project must be in one system. Use <b>Zoom to data</b> to find the points.</p>
+<h3>The terrain floats above the imagery</h3>
+<p>Switch <b>Height</b> to <i>On base map</i>; this lowers the display so the lowest survey point touches the base map. Levels, contours and sections keep their surveyed values.</p>
+<h3>I imported a DXF and got no points</h3>
+<p>Type the layer names that hold your points and point blocks under <b>Point layers</b>, and the layers of breaklines under <b>Feature-line layers</b>. Layer names are matched case-insensitively.</p>
+
+<h2 id="tin">Terrain model and contours</h2>
+<h3>The TIN has long thin triangles across gaps or outside the survey</h3>
+<p>Use the automatic or semi-automatic constraint mode so the survey limit and the gaps become a boundary and holes, or draw them yourself. Lower the long-edge factor or set a maximum edge length; look at the <b>Rejected triangles</b> layer to see what was removed.</p>
+<h3>Triangles cross a stream or a wall</h3>
+<p>Draw a <b>breakline</b> along it (or import the line) and rebuild. Triangle edges never cross a constraint line.</p>
+<h3>Contours look jagged, or there are far too many small loops</h3>
+<p>Choose Chaikin smoothing and a minimum length for closed loops in the Contours tab. Very noisy survey levels produce many loops; check the data for wrong levels (issue markers show suspicious points).</p>
+<h3>Contours did not change after I edited a constraint line</h3>
+<p>Contours belong to a TIN run. Rebuild the TIN, then generate the contours again from the new run.</p>
+
+<h2 id="road">Road design</h2>
+<h3>"The alignment has no ground under it"</h3>
+<p>Part of the alignment lies outside the terrain model. Move the IPs inside the surveyed area, or extend the survey and rebase the design on the new TIN run.</p>
+<h3>"The corridor was built for the previous geometry: rebuild it under Earthworks"</h3>
+<p>You changed the alignment, profile or templates after the last corridor build. Press <b>Rebuild now</b> in the banner of the Earthworks stage (or <b>Build corridor</b>); sections, quantities, suggestions and drawings then match the design. To skip this step in future, tick <i>rebuild the corridor and cross-sections at once</i> in the Alignment stage.</p>
+<h3>"Grade line out of date"</h3>
+<p>The alignment moved after the grade line was saved, or the grade line no longer covers the whole road. Use the buttons in the banner: <b>Stretch to new length</b> keeps your PVIs at the same relative positions and cut / fill depths, <b>Re-fit to ground</b> starts a fresh grade line, <b>Trim / extend to range</b> only fixes the ends. Choose the behaviour you want for future changes under <i>When the alignment changes</i> in the Alignment stage.</p>
+<h3>A curve is marked invalid or the curve table shows a dash</h3>
+<p>The tangent lengths of neighbouring curves overlap: the IPs are too close for those radii and transition lengths. Reduce a radius or transition, or move an IP.</p>
+<h3>Suggest finds no culverts</h3>
+<p>Culverts are placed where feature lines named like <i>stream</i> or <i>khola</i> cross the alignment and at sag points of the profile. Name your stream lines in the Data tab of the terrain workspace, or add culverts by hand in the table.</p>
+<h3>"A heavier lining is required" on a drain</h3>
+<p>The longitudinal gradient at that drain is steeper than its lining suits. NRS 2070 Table 13-3 asks for turf above 1 % (sandy) or 2 % (clayey), stone pitching, masonry or concrete from 3 %, and a stepped channel above 5 %. Change the type in the Drainage stage, or press <b>Suggest</b> and let the software pick it from the grade line.</p>
+<h3>A wall type is flagged as too high</h3>
+<p>Each type in the catalogue carries a usual height: 3 m for dry stone, 6 m for masonry, 8 m for gabion, 12 m for a counterfort or reinforced soil. Above that, choose a heavier type or have the wall designed specially. These heights are application defaults, not values from the standard.</p>
+<h3>The typical section does not catch the ground on one side</h3>
+<p>The slope did not reach the ground within the <b>daylight search width</b>. Increase it, use a flatter slope or benches, or place a retaining or breast wall there (Suggest proposes one).</p>
+
+<h2 id="output">Drawings and exports</h2>
+<h3>"Plan scale is too large for this paper"</h3>
+<p>At that scale the labels alone are wider than the drawing area. Choose a smaller scale number (for example 1:1000 instead of 1:200) or a larger paper.</p>
+<h3>A cross-section says "drawn 1:xxx to fit"</h3>
+<p>That section is deeper or wider than the drawing area allows at the sheet scale, so it was drawn smaller. Use a smaller scale for the cross-section sheets or a larger paper if you need one scale throughout.</p>
+<h3>The longitudinal section has many datum changes</h3>
+<p>The road is steep for the vertical scale. Use a larger vertical scale number (V 1:200 instead of 1:100) or a larger paper; the horizontal scale can stay.</p>
+<h3>Sheets are missing from the list</h3>
+<p>Cross-section sheets need a built corridor. Longitudinal sections need ground under the alignment or a saved grade line. The problems list under the sheets tells you which input is missing.</p>
+<h3>AutoCAD opens the DXF far from the origin or in the wrong units</h3>
+<p>The sheets DXF is in millimetres with the sheets laid side by side; use the Layout tabs to plot, or <code>ZOOM Extents</code> in model space. The model DXF is in metres in the project coordinate system, like the terrain DXF.</p>
+<h3>"Exports are available to signed-in users"</h3>
+<p>You are in the guest sandbox. Sign in with an account from the administrator; your sandbox projects come with you.</p>
+<h3>Excel shows the same numbers after I changed the factors</h3>
+<p>Enable editing in Excel. The adjusted volumes, net and cumulative columns are formulas that reference the factor cells at the top of the Volumes sheet.</p>
+
+<h2 id="accounts">Accounts and server</h2>
+<h3>"Server busy - retrying in 10 s"</h3>
+<p>Other heavy requests are running. The browser retries by itself; nothing is lost.</p>
+<h3>My job says "waiting in queue"</h3>
+<p>Other jobs run first (one per user, guests last). The position and estimate update as they finish. You can keep working in other tabs.</p>
+<h3>"This build would exceed the available memory"</h3>
+<p>The survey is too large for the server right now. Import fewer points, try later, or ask the administrator about a larger server.</p>
+<h3>I cannot edit an alignment: someone else holds the turn</h3>
+<p>Alignments are edited by one person at a time. Ask the colleague to <b>Release turn</b>, or the owner can <b>Force release</b>.</p>
+<h3>Everything is read-only</h3>
+<p>Either you are a viewer (ask the owner for the editor role) or the project is archived (the owner can restore it under Settings).</p>
+
+<h2 id="browser">Browser and performance</h2>
+<ul>
+  <li>Use a current Chrome, Edge or Firefox. The 3-D map needs WebGL; if the map stays black, enable hardware acceleration in the browser settings.</li>
+  <li>Large surveys draw faster in 2D view, with point numbers switched off in the Layers panel.</li>
+  <li>The address bar holds the route to the project and design (for example <code>#/p/…/road/2</code>); bookmark it or send it to a colleague who has access.</li>
+  <li>Unsaved edits are flagged in the top bar; the browser asks before you leave the page with unsaved changes.</li>
+</ul>
+
+<footer>Picasso LandMesh help · updated 2026-09-20</footer>
+</main>
+</div>
+</body>
+</html>

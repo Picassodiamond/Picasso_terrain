@@ -1,0 +1,29 @@
+{
+  "id": "default",
+  "name": "PLM standard sheet (landscape, bottom title strip)",
+  "paper": "A3",
+  "margins": {"left": 20, "right": 10, "top": 10, "bottom": 10},
+  "strip_height": 42,
+  "notes_width": 78,
+  "title_block": {
+    "width": 190,
+    "rows": [
+      [{"label": "ORGANISATION", "field": "organisation", "span": 3}],
+      [{"label": "PROJECT", "field": "project", "span": 3}],
+      [{"label": "DRAWING TITLE", "field": "title", "span": 2}, {"label": "DRAWING NO.", "field": "number", "span": 1}],
+      [{"label": "SCALE", "field": "scale", "span": 1}, {"label": "DATE", "field": "date", "span": 1}, {"label": "SHEET", "field": "sheet", "span": 1}],
+      [{"label": "DRAWN", "field": "drawn_by", "span": 1}, {"label": "CHECKED", "field": "checked_by", "span": 1}, {"label": "APPROVED", "field": "approved_by", "span": 1}]
+    ]
+  },
+  "scales": {"plan": 1000, "profile_h": 1000, "profile_v": 100, "section": 200},
+  "chainage_interval": 20,
+  "swath": 15,
+  "rotate": "along_road",
+  "text": {"title": 3.5, "normal": 2.5, "small": 1.8, "tiny": 1.5},
+  "notes": [
+    "All dimensions are in metres unless noted otherwise.",
+    "Levels refer to the project datum of the terrain model.",
+    "Chainages are in km + m along the design centre line.",
+    "Cross slopes: normal camber unless a superelevation is shown."
+  ]
+}

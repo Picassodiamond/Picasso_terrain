@@ -38,6 +38,10 @@ export interface Member { user_id: string; username: string; role: string; organ
 export type FeatureCollection = { type: "FeatureCollection"; features: any[] };
 export interface ModuleInfo { id: string; label: string; icon: string; kind: string; status: string; maturity?: string; description: string; requires: string[]; seeds?: string[]; stages: { id: string; label: string; description: string }[] }
 export interface Design { id: number; module: string; name: string; tin_run_id: number | null; alignment_id: number | null; settings: Record<string, any>; status: string; created: string; updated: string }
+export interface StructureKind { label: string; group: "wall" | "cross" | "drain"; sided: boolean; types: string[]; default_type: string; params: Record<string, any>; note: string; type_labels: Record<string, string> }
+export interface StructuresPayload { structures: any[]; kinds: Record<string, StructureKind>; soil: string; checks: any[];
+  catalogue: { kinds: Record<string, StructureKind>; wall_types: Record<string, any>; drain_types: Record<string, any>; culvert_types: Record<string, any>; materials: Record<string, { label: string; unit: string }>; groups: Record<string, string[]> };
+  quantities: { rows: any[]; totals: Record<string, number>; by_kind: Record<string, { count: number; length: number }>; materials: Record<string, { label: string; unit: string }> } }
 export interface PointDetail { fid: number; id: string; x: number; y: number; z: number; remark: string; layer: string; source: string }
 export interface TileIndex { n: number; tile_triangles: number; n_triangles: number; n_nodes: number; bounds: number[]; z_range: number[]; tiles: { i: number; j: number; triangles: number; bounds: number[] }[] }
 
@@ -199,6 +203,35 @@ export const api = {
   },
   modules: {
     list: () => request<ModuleInfo[]>("GET", "/api/modules"),
+  },
+  road: {
+    base: (pid: string, did: number) => `/api/projects/${pid}/designs/${did}/road`,
+    overview: (pid: string, did: number) => request<any>("GET", api.road.base(pid, did)),
+    horizontal: (pid: string, did: number) => request<any>("GET", `${api.road.base(pid, did)}/horizontal`),
+    putHorizontal: (pid: string, did: number, body: { ips: any[]; start_chainage: number; follow?: string }) => request<any>("PUT", `${api.road.base(pid, did)}/horizontal`, body),
+    previewHorizontal: (pid: string, did: number, body: { ips: any[]; start_chainage: number }, ground = false) =>
+      request<any>("POST", `${api.road.base(pid, did)}/horizontal/preview${ground ? "?ground=true" : ""}`, body),
+    followVertical: (pid: string, did: number, body: { mode: string; spacing?: number | null }) => request<any>("POST", `${api.road.base(pid, did)}/vertical/follow`, body),
+    ground: (pid: string, did: number, interval = 10) => request<{ points: { chainage: number; z: number; x: number; y: number }[]; start_chainage: number; end_chainage: number }>("GET", `${api.road.base(pid, did)}/ground${q({ interval })}`),
+    vertical: (pid: string, did: number) => request<any>("GET", `${api.road.base(pid, did)}/vertical`),
+    putVertical: (pid: string, did: number, body: { pvis: any[]; source?: string }) => request<any>("PUT", `${api.road.base(pid, did)}/vertical`, body),
+    autoVertical: (pid: string, did: number, body: { spacing: number; curve_length?: number | null }) => request<any>("POST", `${api.road.base(pid, did)}/vertical/auto`, body),
+    templates: (pid: string, did: number) => request<any>("GET", `${api.road.base(pid, did)}/templates`),
+    putTemplates: (pid: string, did: number, body: Record<string, unknown>) => request<any>("PUT", `${api.road.base(pid, did)}/templates`, body),
+    buildCorridor: (pid: string, did: number, body: Record<string, unknown>) => request<any>("POST", `${api.road.base(pid, did)}/corridor`, body),
+    corridor: (pid: string, did: number) => request<any>("GET", `${api.road.base(pid, did)}/corridor`),
+    section: (pid: string, did: number, chainage: number) => request<any>("GET", `${api.road.base(pid, did)}/corridor/section${q({ chainage })}`),
+    volumesCsvUrl: (pid: string, did: number) => `${api.road.base(pid, did)}/corridor/volumes.csv`,
+    structures: (pid: string, did: number) => request<StructuresPayload>("GET", `${api.road.base(pid, did)}/structures`),
+    putStructures: (pid: string, did: number, structures: any[]) => request<StructuresPayload>("PUT", `${api.road.base(pid, did)}/structures`, { structures }),
+    suggestStructures: (pid: string, did: number, body: Record<string, unknown>) => request<{ suggestions: any[] }>("POST", `${api.road.base(pid, did)}/structures/suggest`, body),
+    standards: (pid: string, did: number) => request<any>("GET", `${api.road.base(pid, did)}/standards`),
+    sheets: (pid: string, did: number) => request<any>("GET", `${api.road.base(pid, did)}/sheets`),
+    putSheetSettings: (pid: string, did: number, body: Record<string, unknown>) => request<any>("PUT", `${api.road.base(pid, did)}/sheets/settings`, body),
+    sheetSvgUrl: (pid: string, did: number, kind: string, index1: number) => `${api.road.base(pid, did)}/sheets/${kind}/${index1}.svg`,
+    sheetsDxfUrl: (pid: string, did: number, kinds?: string) => `${api.road.base(pid, did)}/export/sheets.dxf${kinds ? q({ kinds }) : ""}`,
+    modelDxfUrl: (pid: string, did: number) => `${api.road.base(pid, did)}/export/model.dxf`,
+    xlsxUrl: (pid: string, did: number) => `${api.road.base(pid, did)}/export/design.xlsx`,
   },
   designs: {
     list: (pid: string) => request<Design[]>("GET", `/api/projects/${pid}/designs`),

@@ -594,7 +594,7 @@ def contour_labels_geojson(store: ProjectStore, set_id: int, project_crs: str | 
 
 # ------------------------------------------------------------------ alignments
 def alignment_from_dict(d: dict) -> HorizontalAlignment:
-    ips = [IP(float(p["x"]), float(p["y"]), float(p.get("radius", 0) or 0), str(p.get("label", ""))) for p in d["ips"]]
+    ips = [IP(float(p["x"]), float(p["y"]), float(p.get("radius", 0) or 0), str(p.get("label", "")), float(p.get("transition", 0) or 0)) for p in d["ips"]]
     return HorizontalAlignment(ips, float(d.get("start_chainage", 0.0)), float(d.get("min_radius", 4.0)))
 
 
@@ -602,7 +602,7 @@ def alignment_out(store_row: dict, al: HorizontalAlignment) -> dict:
     return {
         "id": store_row["id"], "name": store_row["name"], "start_chainage": al.start_chainage,
         "end_chainage": al.end_chainage, "length": al.length, "valid": al.is_valid,
-        "ips": [{"x": p.x, "y": p.y, "radius": p.radius, "label": p.label} for p in al.ips],
+        "ips": [{"x": p.x, "y": p.y, "radius": p.radius, "label": p.label, "transition": p.transition} for p in al.ips],
         "geometry": [g.__dict__ | {"bc": list(g.bc), "ec": list(g.ec), "centre": list(g.centre) if g.centre else None} for g in al.geometry],
         "elements": [{"kind": e.kind, "start_chainage": e.start_chainage, "end_chainage": e.end_chainage,
                       "start": list(e.start), "end": list(e.end), "radius": e.radius,
@@ -623,7 +623,7 @@ def save_alignment(store: ProjectStore, body: dict, alignment_id: int | None = N
     dense, _ = al.densify(1.0, 2.0)
     aid = store.save_alignment(
         body.get("name", "Alignment"), al.start_chainage,
-        [{"x": p.x, "y": p.y, "radius": p.radius, "label": p.label} for p in al.ips],
+        [{"x": p.x, "y": p.y, "radius": p.radius, "label": p.label, "transition": p.transition} for p in al.ips],
         body.get("style") or {}, al.length, dense, al.end_chainage, alignment_id=alignment_id,
     )
     row = store.get_alignment(aid)

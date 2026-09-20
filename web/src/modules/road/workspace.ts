@@ -1,20 +1,20 @@
-/** Road design workspace (shell).
+/** Road design workspace.
  *
  * Layout: stage panel (left) | 2-D plan view + status bar (centre) | cross-section (right), with the
- * ground profile docked below. Everything shown is read from the terrain snapshot the design is
- * pinned to (one TIN run) through the existing terrain endpoints. The road engine (standards checks,
- * vertical alignment, templates, earthworks, structures, drainage) plugs into the stage panel later.
+ * longitudinal profile docked below. The design (horizontal IPs, vertical PVIs, templates, corridor,
+ * structures) is served by the road module API; the terrain snapshot (one TIN run) is read-only.
+ * IPs are dragged on the plan, PVIs in the profile; tables in the stage panel edit the same buffers.
  */
-import { api, ApiError, type Alignment, type Design, type ModuleInfo, type Project, type ProfilePoint, type Section, type TinRun } from "../../api";
+import { api, ApiError, type Design, type ModuleInfo, type Project, type ProfilePoint, type Section, type TinRun } from "../../api";
 import { renderProfile } from "../../charts/profile";
 import { renderSection } from "../../charts/section";
-import { densify } from "../../geom/alignment";
 import { store, toast } from "../../state";
-import { button, el, field, fmt, fmtChainage, select } from "../../ui/dom";
+import { button, el, fmt, fmtChainage, select } from "../../ui/dom";
 import { renderModuleSwitcher } from "../../ui/moduleSwitcher";
 import type { ModuleContext, ModuleInstance } from "../registry";
 import { designHash, terrainHash } from "../registry";
 import { PlanView, type PlanLayer } from "./plan";
+import { renderAlignmentStage, renderEarthworksStage, renderOutputStage, renderProfileStage, renderStructuresStage, renderTemplatesStage } from "./stages";
 
 export async function openRoadWorkspace(ctx: ModuleContext): Promise<ModuleInstance> {
   const ws = new RoadWorkspace(ctx);
@@ -23,20 +23,30 @@ export async function openRoadWorkspace(ctx: ModuleContext): Promise<ModuleInsta
 }
 
 /** Densified centreline with cumulative distance, for chainage / offset lookups in the browser. */
-interface Centreline { xy: number[][]; d: number[]; length: number; start: number }
+interface Centreline { xy: number[][]; ch: number[]; start: number; end: number }
 
-const ROAD_CLASSES = [["national", "National Highway"], ["feeder", "Feeder Road"], ["district", "District Road"], ["village", "Village Road"]];
-const TERRAINS = [["plain", "Plain"], ["rolling", "Rolling"], ["mountainous", "Mountainous"], ["steep", "Steep"]];
-const SPEEDS = [100, 80, 60, 50, 40, 30, 25, 20];
+const err = (e: unknown) => toast(e instanceof ApiError ? e.detail : String(e), "error");
 
-class RoadWorkspace implements ModuleInstance {
+export class RoadWorkspace implements ModuleInstance {
   private root: HTMLElement;
   project: Project;
   design: Design;
-  private runs: TinRun[] = [];
-  private run: TinRun | undefined;
-  private alignment: Alignment | null = null;
-  private centre: Centreline | null = null;
+  pid: string;
+  did: number;
+  runs: TinRun[] = [];
+  run: TinRun | undefined;
+  data: { overview?: any; horizontal?: any; vertical?: any; ground?: any; templates?: any; corridor?: any; structures?: any; standards?: any; sheets?: any } = {};
+  /** unsaved edit buffers (tables and drag handles write here) */
+  editIps: any[] = [];
+  editStart = 0;
+  editPvis: any[] = [];
+  editTemplates: any = null;
+  editStructures: any[] = [];
+  previewH: any = null;
+  /** ground profile under the alignment being dragged (live preview) */
+  previewGround: any[] | null = null;
+  dirty = new Set<string>();
+  station = 0;
   private module: ModuleInfo | null = null;
   private plan!: PlanView;
   private stageHost!: HTMLElement;
@@ -45,19 +55,26 @@ class RoadWorkspace implements ModuleInstance {
   private sectionHead!: HTMLElement;
   private statusEl!: HTMLElement;
   private switcherHost!: HTMLElement;
+  private dirtyEl!: HTMLElement;
+  private toolbar!: HTMLElement;
   private activeStage = "alignment";
-  private station = 0;
   private sectionInterval = 20;
   private halfWidth = 15;
+  private centre: Centreline | null = null;
   private cursor: { x: number; y: number; dir: number } | null = null;
+  private dragPreview: number[][] | null = null;
   private profileCursor: ((ch: number | null) => void) | null = null;
   private rlTimer: number | null = null;
+  private previewTimer: number | null = null;
+  private terrainLayers: PlanLayer[] = [];
   private destroyed = false;
 
   constructor(ctx: ModuleContext) {
     this.root = ctx.root;
     this.project = ctx.project;
     this.design = ctx.design;
+    this.pid = ctx.project.id;
+    this.did = ctx.design.id;
   }
 
   destroy(): void {
@@ -66,27 +83,30 @@ class RoadWorkspace implements ModuleInstance {
     this.root.innerHTML = "";
   }
 
-  // ------------------------------------------------------------------ boot
+  // ================================================================== boot and layout
   async init(): Promise<void> {
     this.root.innerHTML = "";
     const user = store.get("user");
-    const pid = this.project.id;
     this.switcherHost = el("span", { class: "switcher-host" });
+    this.dirtyEl = el("span", { class: "badge warn", style: "display:none" }, "unsaved changes");
     const top = el("header", { class: "topbar" },
       el("div", { class: "brand", onClick: () => { location.hash = ""; }, style: "cursor:pointer", title: "All projects" }, el("span", { style: "color:var(--accent)" }, "▲"), "Picasso LandMesh"),
-      el("span", { class: "project-name" }, "project ", el("b", {}, this.project.name), el("span", { class: "badge" }, "Road design"), el("b", { style: "margin-left:6px" }, this.design.name)),
+      el("span", { class: "project-name" }, "project ", el("b", {}, this.project.name), el("span", { class: "badge" }, "Road design"), el("b", { style: "margin-left:6px" }, this.design.name), this.dirtyEl),
       this.switcherHost,
       el("span", { class: "spacer" }),
       el("span", { class: "muted" }, this.project.crs_info?.is_local ? "local grid" : this.project.crs_info?.name || this.project.crs),
       user?.authenticated ? el("span", { class: "muted" }, user.username) : null,
+      button("Help", () => window.open("/help/road.html", "_blank"), "btn small"),
     );
     this.stageHost = el("aside", { class: "road-side" });
     const planHost = el("div", { class: "plan-wrap" });
     this.statusEl = el("div", { class: "road-status mono" }, "move over the plan");
-    const toolbar = el("div", { class: "plan-toolbar" });
-    planHost.append(toolbar, this.statusEl);
+    this.toolbar = el("div", { class: "plan-toolbar" });
+    planHost.append(this.toolbar, this.statusEl);
     this.profileEl = el("div", { class: "road-profile-body" });
-    const profile = el("section", { class: "road-profile" }, el("div", { class: "chart-head" }, el("b", {}, "Longitudinal profile"), el("span", { class: "muted" }, "ground line from the terrain snapshot; design grade arrives with the profile stage")), this.profileEl);
+    const vsel = select([2, 5, 10, 20].map((v) => ({ value: String(v), label: `V ×${v}` })), String(this.vScale));
+    vsel.addEventListener("change", () => { this.vScale = Number(vsel.value); this.renderProfile(); });
+    const profile = el("section", { class: "road-profile" }, el("div", { class: "chart-head" }, el("b", {}, "Longitudinal profile"), el("span", { class: "muted" }, "ground from the terrain snapshot · design grade with draggable PVIs"), el("span", { class: "spacer" }), vsel), this.profileEl);
     this.sectionEl = el("div", { class: "road-section-body" });
     this.sectionHead = el("div", { class: "chart-head" });
     const right = el("aside", { class: "road-right" }, this.sectionHead, this.sectionEl);
@@ -97,198 +117,546 @@ class RoadWorkspace implements ModuleInstance {
     this.plan.onMove = (x, y) => this.updateStatus(x, y);
     this.plan.onLeave = () => { this.statusEl.textContent = "move over the plan"; };
     this.plan.onClick = (x, y) => { const s = this.stationAt(x, y); if (s) void this.showSection(s.chainage); };
+    this.plan.onDrag = (id, x, y, phase) => this.onHandleDrag(id, x, y, phase);
+    window.addEventListener("beforeunload", this.beforeUnload);
 
-    // data: terrain snapshot, seed alignment, modules, designs for the switcher
-    const [runs, designs, modules, alignments] = await Promise.all([
-      api.tin.list(pid), api.designs.list(pid), api.modules.list().catch(() => [] as ModuleInfo[]), api.alignments.list(pid),
-    ]);
+    const [runs, designs, modules] = await Promise.all([api.tin.list(this.pid), api.designs.list(this.pid), api.modules.list().catch(() => [] as ModuleInfo[])]);
     if (this.destroyed) return;
     this.runs = runs;
     this.run = runs.find((r) => r.id === this.design.tin_run_id) ?? runs[runs.length - 1];
     this.module = modules.find((m) => m.id === "road") ?? null;
-    this.alignment = alignments.find((a) => a.id === this.design.alignment_id) ?? null;
-    this.centre = this.alignment ? centreline(this.alignment) : null;
-    this.switcherHost.replaceChildren(renderModuleSwitcher(pid, designs, this.design.id, (mid) => void this.newDesign(mid)));
-    this.station = this.alignment?.start_chainage ?? 0;
+    this.switcherHost.replaceChildren(renderModuleSwitcher(this.pid, designs, this.design.id, (mid) => void this.newDesign(mid)));
+    await this.loadTerrainLayers();
+    await this.loadAll();
+  }
 
-    await this.buildPlan(toolbar, alignments);
-    this.renderStages(alignments);
-    void this.loadProfile();
+  private beforeUnload = (e: BeforeUnloadEvent) => { if (this.dirty.size) { e.preventDefault(); e.returnValue = ""; } };
+  vScale = 5;
+
+  // ================================================================== data
+  async loadAll(): Promise<void> {
+    const r = api.road;
+    const overview = await r.overview(this.pid, this.did);
+    const [horizontal, vertical, templates, structures, standards, corridor] = await Promise.all([
+      r.horizontal(this.pid, this.did), r.vertical(this.pid, this.did), r.templates(this.pid, this.did),
+      r.structures(this.pid, this.did), r.standards(this.pid, this.did),
+      overview.has_corridor ? r.corridor(this.pid, this.did).catch(() => null) : Promise.resolve(null),
+    ]);
+    if (this.destroyed) return;
+    Object.assign(this.data, { overview, horizontal, vertical, templates, structures, standards, corridor });
+    this.data.ground = horizontal?.ips?.length ? await r.ground(this.pid, this.did, 10).catch(() => null) : null;
+    this.resetEdits();
+    this.setCentre(horizontal);
+    this.station = Math.max(this.station, this.centre?.start ?? 0);
+    this.buildPlan();
+    this.renderStage();
+    this.renderProfile();
     void this.showSection(this.station);
   }
 
-  // ------------------------------------------------------------------ plan layers
-  private async buildPlan(toolbar: HTMLElement, alignments: Alignment[]): Promise<void> {
-    const pid = this.project.id;
-    const run = this.run;
-    const layers: PlanLayer[] = [];
-    let bounds: number[] | null = this.project.summary?.bounds ?? null;
+  private resetEdits(): void {
+    this.editIps = JSON.parse(JSON.stringify(this.data.horizontal?.ips || []));
+    this.editStart = this.data.horizontal?.start_chainage ?? 0;
+    this.editPvis = JSON.parse(JSON.stringify(this.data.vertical?.pvis || []));
+    this.editTemplates = this.data.templates ? { templates: JSON.parse(JSON.stringify(this.data.templates.templates)), assignments: JSON.parse(JSON.stringify(this.data.templates.assignments)), superelevation: { ...(this.data.templates.superelevation || {}) } } : null;
+    this.editStructures = JSON.parse(JSON.stringify(this.data.structures?.structures || []));
+    this.previewH = null;
+    this.dirty.clear();
+    this.dirtyEl.style.display = "none";
+  }
 
-    if (run) {
-      const [hull, sets, lines] = await Promise.all([
-        api.tin.hull(pid, run.id).catch(() => null),
-        api.contours.list(pid),
-        api.data.lines(pid).catch(() => ({ type: "FeatureCollection", features: [] })),
-      ]);
-      if (this.destroyed) return;
-      if (hull && hull.features.length) {
-        layers.push({ id: "hull", label: "Terrain extent", visible: true, draw: (ctx, v) => {
-          for (const f of hull.features) {
-            const rings: number[][][] = f.geometry.coordinates;
-            ctx.fillStyle = "#111a2c"; ctx.strokeStyle = "#2a3a55"; ctx.lineWidth = 1;
-            for (const ring of rings) { v.path(ctx, ring, true); ctx.fill(); ctx.stroke(); }
-          }
-        } });
-        bounds = run.bounds.every((b) => b != null) ? (run.bounds as number[]) : bounds;
-      }
-      const set = [...sets].reverse().find((s) => s.run_id === run.id) ?? sets[sets.length - 1];
-      if (set) {
-        const fc = await api.contours.geojson(pid, set.id);
-        if (this.destroyed) return;
-        layers.push({ id: "contours", label: `Contours (set ${set.id}, ${set.params.interval} m)`, visible: true, draw: (ctx, v) => {
-          for (const f of fc.features) {
-            const major = f.properties.major;
-            ctx.strokeStyle = major ? "#5b6b85" : "#2f3d55"; ctx.lineWidth = major ? 1.4 : 0.8;
-            v.path(ctx, f.geometry.coordinates); ctx.stroke();
-          }
-          if (v.scale > 0.5) {
-            ctx.fillStyle = "#7c8ba5"; ctx.font = "10px system-ui";
-            for (const f of fc.features) {
-              if (!f.properties.major) continue;
-              const c: number[][] = f.geometry.coordinates;
-              const m = c[Math.floor(c.length / 2)];
-              const [sx, sy] = v.toScreen(m[0], m[1]);
-              ctx.fillText(String(f.properties.label ?? f.properties.level), sx + 2, sy - 2);
-            }
-          }
-        } });
-      }
-      const KIND_COLORS: Record<string, string> = { feature: "#1f6f8b", boundary: "#8b3a93", void: "#8b5a2b", contour: "#5c7a1f" };
-      layers.push({ id: "constraints", label: "Constraint lines", visible: true, draw: (ctx, v) => {
-        for (const f of lines.features) {
-          ctx.strokeStyle = KIND_COLORS[f.properties.kind] || "#38bdf8"; ctx.lineWidth = f.properties.kind === "boundary" ? 1.6 : 1.1;
-          ctx.setLineDash(f.properties.source === "auto" ? [6, 4] : []);
-          v.path(ctx, f.geometry.coordinates); ctx.stroke();
+  private setCentre(h: any): void {
+    const g = h?.geometry;
+    this.centre = g?.centreline?.length ? { xy: g.centreline, ch: g.chainages, start: h.start_chainage, end: h.end_chainage } : null;
+  }
+
+  markDirty(key: string): void {
+    this.dirty.add(key);
+    this.dirtyEl.style.display = "";
+    this.dirtyEl.textContent = `unsaved: ${[...this.dirty].join(", ")}`;
+  }
+
+  private clearDirty(key: string): void {
+    this.dirty.delete(key);
+    this.dirtyEl.style.display = this.dirty.size ? "" : "none";
+    this.dirtyEl.textContent = `unsaved: ${[...this.dirty].join(", ")}`;
+  }
+
+  // ================================================================== actions: settings, horizontal
+  /** What happens to the grade line when the alignment is saved: stretch | refit | trim | keep. */
+  get followMode(): string { return String((this.design.settings as any)?.follow?.vertical ?? "stretch"); }
+  /** Rebuild the corridor (and so the cross-sections) right after an alignment or profile change. */
+  get autoCorridor(): boolean { return !!(this.design.settings as any)?.follow?.corridor; }
+
+  async setFollow(patch: { vertical?: string; corridor?: boolean }): Promise<void> {
+    try {
+      const follow = { ...((this.design.settings as any)?.follow || {}), ...patch };
+      this.design = await api.designs.patch(this.pid, this.did, { settings: { follow } });
+      toast(patch.vertical ? `On alignment change: ${patch.vertical === "keep" ? "keep the grade line" : patch.vertical === "refit" ? "re-fit the grade line to the ground" : patch.vertical === "trim" ? "trim / extend the grade line" : "stretch the grade line"}` : `Automatic corridor rebuild ${patch.corridor ? "on" : "off"}`, "ok");
+    } catch (e) { err(e); }
+  }
+
+  lastCorridorParams(): Record<string, unknown> {
+    const p = this.data.corridor?.summary?.params || {};
+    return { interval: p.interval ?? 20, prismoidal: !!p.prismoidal, cut_factor: p.cut_factor ?? 1, fill_factor: p.fill_factor ?? 1, ...(p.swath ? { swath: p.swath } : {}) };
+  }
+
+  /** After a geometry change: rebuild the corridor when the design asks for it, otherwise say it is stale. */
+  private async afterGeometryChange(): Promise<void> {
+    if (this.autoCorridor && this.data.vertical?.pvis?.length >= 2 && (this.data.corridor || this.data.overview?.has_corridor)) await this.buildCorridor(this.lastCorridorParams());
+    else if (this.data.corridor) toast("The corridor was built for the previous geometry: rebuild it under Earthworks", "info");
+  }
+
+  async followVertical(mode: string): Promise<void> {
+    try {
+      store.set("busy", "Updating the grade line");
+      this.data.vertical = await api.road.followVertical(this.pid, this.did, { mode });
+      this.editPvis = JSON.parse(JSON.stringify(this.data.vertical.pvis));
+      this.clearDirty("vertical");
+      this.data.sheets = undefined;
+      this.data.overview = await api.road.overview(this.pid, this.did);
+      toast(mode === "refit" ? `Grade line re-fitted: ${this.data.vertical.pvis.length} PVIs` : mode === "trim" ? "Grade line trimmed / extended to the alignment" : "Grade line stretched to the alignment, cut / fill depths kept", "ok");
+      this.renderStage();
+      this.renderProfile();
+      void this.showSection(this.station);
+    } catch (e) { err(e); } finally { store.set("busy", null); }
+    await this.afterGeometryChange();
+  }
+
+  async saveSettings(patch: Record<string, unknown>): Promise<void> {
+    try {
+      this.design = await api.designs.patch(this.pid, this.did, { settings: patch });
+      toast("Design parameters saved", "ok");
+      await this.loadAll();
+    } catch (e) { err(e); }
+  }
+
+  async rebase(runId: number): Promise<void> {
+    try {
+      this.design = await api.designs.patch(this.pid, this.did, { tin_run_id: runId });
+      toast(`Design rebased onto TIN run ${runId}`, "ok");
+      await this.init();
+    } catch (e) { err(e); }
+  }
+
+  previewHorizontal(): void {
+    if (this.previewTimer) window.clearTimeout(this.previewTimer);
+    this.previewTimer = window.setTimeout(async () => {
+      if (this.editIps.length < 2) return;
+      try {
+        this.previewH = await api.road.previewHorizontal(this.pid, this.did, { ips: this.editIps, start_chainage: this.editStart }, !!this.run);
+        this.previewGround = Array.isArray(this.previewH?.ground) && this.previewH.ground.length ? this.previewH.ground : null;
+        this.setCentre(this.previewH);
+        this.dragPreview = null;
+        this.buildPlan();
+        this.renderProfile();
+        if (this.activeStage === "alignment") this.renderStage();
+      } catch (e) { err(e); }
+    }, 120);
+  }
+
+  async saveHorizontal(): Promise<void> {
+    if (this.editIps.length < 2) { toast("An alignment needs at least two IPs", "error"); return; }
+    try {
+      this.data.horizontal = await api.road.putHorizontal(this.pid, this.did, { ips: this.editIps, start_chainage: this.editStart, follow: this.followMode });
+      this.previewH = null;
+      this.previewGround = null;
+      this.clearDirty("horizontal");
+      this.data.sheets = undefined;
+      this.data.ground = await api.road.ground(this.pid, this.did, 10).catch(() => null);
+      this.data.vertical = await api.road.vertical(this.pid, this.did);
+      this.editPvis = JSON.parse(JSON.stringify(this.data.vertical?.pvis || []));
+      this.data.overview = await api.road.overview(this.pid, this.did);
+      this.editIps = JSON.parse(JSON.stringify(this.data.horizontal.ips));
+      this.setCentre(this.data.horizontal);
+      toast(`Alignment saved: ${fmt(this.data.horizontal.length, 1)} m${this.data.horizontal.is_valid ? "" : " (geometry issues, see checks)"}`, this.data.horizontal.is_valid ? "ok" : "error");
+      const vf = this.data.horizontal.vertical_follow;
+      if (vf?.applied) toast(`Profile updated: ${vf.message}`, "ok");
+      else if (vf?.message) toast(vf.message, "error");
+      else if (this.data.vertical?.stale) toast("The grade line is out of date: see the Profile stage", "info");
+      this.buildPlan();
+      this.renderStage();
+      this.renderProfile();
+      void this.showSection(this.station);
+    } catch (e) { err(e); return; }
+    await this.afterGeometryChange();
+  }
+
+  revertHorizontal(): void {
+    this.editIps = JSON.parse(JSON.stringify(this.data.horizontal?.ips || []));
+    this.editStart = this.data.horizontal?.start_chainage ?? 0;
+    this.previewH = null;
+    this.previewGround = null;
+    this.clearDirty("horizontal");
+    this.setCentre(this.data.horizontal);
+    this.buildPlan();
+    this.renderStage();
+  }
+
+  private onHandleDrag(id: string, x: number, y: number, phase: "start" | "move" | "end"): void {
+    const i = Number(id.replace("ip", ""));
+    const p = this.editIps[i];
+    if (!p) return;
+    if (phase === "move") {
+      p.x = x; p.y = y;
+      this.dragPreview = this.editIps.map((q) => [q.x, q.y]);
+      this.plan.requestRender();
+      return;
+    }
+    if (phase === "end") {
+      p.x = x; p.y = y;
+      this.markDirty("horizontal");
+      this.previewHorizontal();
+    }
+  }
+
+  // ================================================================== actions: vertical
+  async saveVertical(): Promise<void> {
+    if (this.editPvis.length < 2) { toast("A vertical alignment needs at least two PVIs", "error"); return; }
+    try {
+      this.data.vertical = await api.road.putVertical(this.pid, this.did, { pvis: this.editPvis, source: "manual" });
+      this.editPvis = JSON.parse(JSON.stringify(this.data.vertical.pvis));
+      this.clearDirty("vertical");
+      this.data.sheets = undefined;
+      this.data.overview = await api.road.overview(this.pid, this.did);
+      toast(this.data.vertical.is_valid ? "Profile saved" : "Profile saved with geometry issues (see checks)", this.data.vertical.is_valid ? "ok" : "error");
+      this.renderStage();
+      this.renderProfile();
+      void this.showSection(this.station);
+    } catch (e) { err(e); return; }
+    await this.afterGeometryChange();
+  }
+
+  async autoVertical(spacing: number): Promise<void> {
+    try {
+      store.set("busy", "Fitting the grade line to the ground");
+      this.data.vertical = await api.road.autoVertical(this.pid, this.did, { spacing });
+      this.editPvis = JSON.parse(JSON.stringify(this.data.vertical.pvis));
+      this.clearDirty("vertical");
+      this.data.sheets = undefined;
+      this.data.overview = await api.road.overview(this.pid, this.did);
+      toast(`Grade line fitted: ${this.data.vertical.pvis.length} PVIs`, "ok");
+      this.renderStage();
+      this.renderProfile();
+      void this.showSection(this.station);
+    } catch (e) { err(e); store.set("busy", null); return; } finally { store.set("busy", null); }
+    await this.afterGeometryChange();
+  }
+
+  revertVertical(): void {
+    this.editPvis = JSON.parse(JSON.stringify(this.data.vertical?.pvis || []));
+    this.clearDirty("vertical");
+    this.renderStage();
+    this.renderProfile();
+  }
+
+  // ================================================================== actions: templates, corridor, structures
+  async saveTemplates(): Promise<void> {
+    if (!this.editTemplates) return;
+    try {
+      this.data.sheets = undefined;
+      this.data.templates = await api.road.putTemplates(this.pid, this.did, this.editTemplates);
+      this.editTemplates = { templates: JSON.parse(JSON.stringify(this.data.templates.templates)), assignments: JSON.parse(JSON.stringify(this.data.templates.assignments)), superelevation: { ...(this.data.templates.superelevation || {}) } };
+      this.clearDirty("templates");
+      this.data.horizontal = await api.road.horizontal(this.pid, this.did);  // superelevation table depends on the template settings
+      toast("Templates saved", "ok");
+      this.renderStage();
+    } catch (e) { err(e); }
+  }
+
+  revertTemplates(): void {
+    this.editTemplates = this.data.templates ? { templates: JSON.parse(JSON.stringify(this.data.templates.templates)), assignments: JSON.parse(JSON.stringify(this.data.templates.assignments)), superelevation: { ...(this.data.templates.superelevation || {}) } } : null;
+    this.clearDirty("templates");
+    this.renderStage();
+  }
+
+  async buildCorridor(params: Record<string, unknown>): Promise<void> {
+    if (this.dirty.size) toast(`Unsaved ${[...this.dirty].join(", ")} changes are not used by the corridor`, "info");
+    try {
+      store.set("busy", "Building the corridor");
+      this.data.sheets = undefined;
+      this.data.corridor = await api.road.buildCorridor(this.pid, this.did, params);
+      this.data.overview = await api.road.overview(this.pid, this.did);
+      const t = this.data.corridor.summary.totals;
+      toast(`Corridor built: ${this.data.corridor.summary.sections} sections, cut ${fmt(t.cut, 0)} m³, fill ${fmt(t.fill, 0)} m³`, "ok");
+      this.buildPlan();
+      this.renderStage();
+      void this.showSection(this.station);
+    } catch (e) { err(e); } finally { store.set("busy", null); }
+  }
+
+  volumesCsvUrl(): string { return api.road.volumesCsvUrl(this.pid, this.did); }
+
+  // ================================================================== drawing sheets (Output stage)
+  sheetsLoading = false;
+  async loadSheets(force = false): Promise<void> {
+    if (this.sheetsLoading || (this.data.sheets && !force)) return;
+    this.sheetsLoading = true;
+    try {
+      this.data.sheets = await api.road.sheets(this.pid, this.did);
+    } catch (e) { err(e); this.data.sheets = { sheets: [], problems: [String(e)], settings: {} }; }
+    finally { this.sheetsLoading = false; }
+    if (!this.destroyed && this.activeStage === "output") this.renderStage();
+  }
+
+  async saveSheetSettings(body: Record<string, unknown>): Promise<void> {
+    try {
+      this.data.sheets = await api.road.putSheetSettings(this.pid, this.did, body);
+      toast("Sheet settings saved", "ok");
+    } catch (e) { err(e); }
+    this.renderStage();
+  }
+
+  async saveStructures(): Promise<void> {
+    try {
+      this.data.sheets = undefined;
+      this.data.structures = await api.road.putStructures(this.pid, this.did, this.editStructures);
+      this.editStructures = JSON.parse(JSON.stringify(this.data.structures.structures));
+      this.clearDirty("structures");
+      this.data.overview = await api.road.overview(this.pid, this.did);
+      toast(`${this.editStructures.length} structure(s) saved`, "ok");
+      this.buildPlan();
+      this.renderStage();
+      this.renderProfile();
+    } catch (e) { err(e); }
+  }
+
+  revertStructures(): void {
+    this.editStructures = JSON.parse(JSON.stringify(this.data.structures?.structures || []));
+    this.clearDirty("structures");
+    this.renderStage();
+  }
+
+  async suggestStructures(params: Record<string, unknown>): Promise<any[]> {
+    return (await api.road.suggestStructures(this.pid, this.did, params)).suggestions;
+  }
+
+  // ================================================================== plan
+  private async loadTerrainLayers(): Promise<void> {
+    const layers: PlanLayer[] = [];
+    const run = this.run;
+    if (!run) { this.terrainLayers = layers; return; }
+    const [hull, sets, lines] = await Promise.all([
+      api.tin.hull(this.pid, run.id).catch(() => null), api.contours.list(this.pid), api.data.lines(this.pid).catch(() => ({ type: "FeatureCollection", features: [] })),
+    ]);
+    if (hull && hull.features.length) {
+      layers.push({ id: "hull", label: "Terrain extent", visible: true, draw: (ctx, v) => {
+        for (const f of hull.features) {
+          const rings: number[][][] = f.geometry.coordinates;
+          ctx.fillStyle = "#111a2c"; ctx.strokeStyle = "#2a3a55"; ctx.lineWidth = 1;
+          for (const ring of rings) { v.path(ctx, ring, true); ctx.fill(); ctx.stroke(); }
         }
-        ctx.setLineDash([]);
       } });
     }
+    const set = [...sets].reverse().find((s) => s.run_id === run.id) ?? sets[sets.length - 1];
+    if (set) {
+      const fc = await api.contours.geojson(this.pid, set.id);
+      layers.push({ id: "contours", label: `Contours (${set.params.interval} m)`, visible: true, draw: (ctx, v) => {
+        for (const f of fc.features) {
+          const major = f.properties.major;
+          ctx.strokeStyle = major ? "#5b6b85" : "#2f3d55"; ctx.lineWidth = major ? 1.4 : 0.8;
+          v.path(ctx, f.geometry.coordinates); ctx.stroke();
+        }
+        if (v.scale > 0.5) {
+          ctx.fillStyle = "#7c8ba5"; ctx.font = "10px system-ui";
+          for (const f of fc.features) {
+            if (!f.properties.major) continue;
+            const c: number[][] = f.geometry.coordinates;
+            const mid = c[Math.floor(c.length / 2)];
+            const [sx, sy] = v.toScreen(mid[0], mid[1]);
+            ctx.fillText(String(f.properties.label ?? f.properties.level), sx + 2, sy - 2);
+          }
+        }
+      } });
+    }
+    const KIND_COLORS: Record<string, string> = { feature: "#1f6f8b", boundary: "#8b3a93", void: "#8b5a2b", contour: "#5c7a1f" };
+    layers.push({ id: "constraints", label: "Constraint lines", visible: true, draw: (ctx, v) => {
+      for (const f of lines.features) {
+        ctx.strokeStyle = KIND_COLORS[f.properties.kind] || "#38bdf8"; ctx.lineWidth = f.properties.kind === "boundary" ? 1.6 : 1.1;
+        ctx.setLineDash(f.properties.source === "auto" ? [6, 4] : []);
+        v.path(ctx, f.geometry.coordinates); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    } });
+    this.terrainLayers = layers;
+  }
 
+  private buildPlan(): void {
+    const prevVis = new Map(this.plan.layers.map((l) => [l.id, l.visible]));
+    const layers: PlanLayer[] = [...this.terrainLayers];
+    layers.push({ id: "corridor", label: "Corridor daylight", visible: true, draw: (ctx, v) => {
+      const secs: any[] = this.data.corridor?.sections || [];
+      if (!secs.length) return;
+      for (const side of ["left", "right"] as const) {
+        const pts: number[][] = [];
+        for (const s of secs) {
+          const o = s[side]?.catch_offset;
+          if (o == null) continue;
+          pts.push([s.x + o * Math.sin(s.direction), s.y - o * Math.cos(s.direction)]);
+        }
+        ctx.strokeStyle = "#38bdf8"; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
+        v.path(ctx, pts); ctx.stroke(); ctx.setLineDash([]);
+      }
+      // flags: stations where the slope did not catch the ground
+      ctx.fillStyle = "#ef4444";
+      for (const s of secs) if (s.flags?.length) { const [sx, sy] = v.toScreen(s.x, s.y); ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI * 2); ctx.fill(); }
+    } });
+    layers.push({ id: "structures", label: "Structures", visible: true, draw: (ctx, v) => {
+      const c = this.centre;
+      if (!c) return;
+      for (const s of this.editStructures) {
+        const sided = s.side === "left" || s.side === "right" || s.side === "both";
+        const wall = s.kind.endsWith("wall") || s.kind === "side_drain";
+        if (wall && sided) {
+          for (const side of (s.side === "both" ? ["left", "right"] : [s.side])) {
+            const sgn = side === "left" ? -1 : 1;
+            const pts: number[][] = [];
+            for (let ch = s.from; ch <= s.to + 1e-6; ch += Math.max((s.to - s.from) / 40, 2)) {
+              const p = pointAtChainage(c, Math.min(ch, s.to)); if (!p) continue;
+              const off = sgn * 5;
+              pts.push([p.x + off * Math.sin(p.dir), p.y - off * Math.cos(p.dir)]);
+            }
+            ctx.strokeStyle = s.kind === "side_drain" ? "#22d3ee" : s.kind === "breast_wall" ? "#a78bfa" : "#f472b6"; ctx.lineWidth = 4;
+            v.path(ctx, pts); ctx.stroke();
+          }
+        } else {
+          const p = pointAtChainage(c, s.from); if (!p) continue;
+          const nx = -Math.sin(p.dir), ny = Math.cos(p.dir), L = 12;
+          ctx.strokeStyle = "#22d3ee"; ctx.lineWidth = 3;
+          v.path(ctx, [[p.x - nx * L, p.y - ny * L], [p.x + nx * L, p.y + ny * L]]); ctx.stroke();
+          const [sx, sy] = v.toScreen(p.x + nx * L, p.y + ny * L);
+          ctx.fillStyle = "#a5f3fc"; ctx.font = "10px system-ui"; ctx.fillText(s.kind === "culvert" ? "culvert" : s.kind.replace(/_/g, " "), sx + 3, sy);
+        }
+      }
+    } });
     layers.push({ id: "alignment", label: "Alignment", visible: true, draw: (ctx, v) => {
-      const al = this.alignment, c = this.centre;
-      if (!al || !c) return;
-      ctx.strokeStyle = "#f59e0b"; ctx.lineWidth = 2.5; v.path(ctx, c.xy); ctx.stroke();
-      // chainage ticks every 100 m, labels every 500 m
+      const c = this.centre;
+      const h = this.previewH ?? this.data.horizontal;
+      if (this.dragPreview) { ctx.strokeStyle = "#fde68a"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]); v.path(ctx, this.dragPreview); ctx.stroke(); ctx.setLineDash([]); }
+      if (!c) return;
+      ctx.strokeStyle = this.previewH ? "#fbbf24" : "#f59e0b"; ctx.lineWidth = 2.5; v.path(ctx, c.xy); ctx.stroke();
       ctx.strokeStyle = "#fde68a"; ctx.lineWidth = 1; ctx.fillStyle = "#fde68a"; ctx.font = "11px system-ui";
       const tick = v.scale > 0.15 ? 100 : v.scale > 0.03 ? 500 : 1000;
-      for (let ch = Math.ceil(c.start / tick) * tick; ch <= c.start + c.length; ch += tick) {
-        const s = pointAtChainage(c, ch);
-        if (!s) continue;
+      for (let ch = Math.ceil(c.start / tick) * tick; ch <= c.end; ch += tick) {
+        const s = pointAtChainage(c, ch); if (!s) continue;
         const nx = -Math.sin(s.dir), ny = Math.cos(s.dir), L = 6 / v.scale;
         v.path(ctx, [[s.x - nx * L, s.y - ny * L], [s.x + nx * L, s.y + ny * L]]); ctx.stroke();
         if (ch % (tick * 5) === 0 || tick >= 500) { const [sx, sy] = v.toScreen(s.x + nx * L * 1.5, s.y + ny * L * 1.5); ctx.fillText(fmtChainage(ch, 0), sx + 2, sy); }
       }
-      // IPs
-      for (const ip of al.ips) {
-        const [sx, sy] = v.toScreen(ip.x, ip.y);
-        ctx.fillStyle = "#fb7185"; ctx.fillRect(sx - 4, sy - 4, 8, 8);
-        ctx.fillStyle = "#fecdd3"; ctx.fillText(ip.label || "", sx + 6, sy - 6);
-      }
-      for (const k of al.key_points || []) {
+      // tangent lines between IPs and key points
+      const ips = this.editIps;
+      if (ips.length > 1) { ctx.strokeStyle = "rgba(251,113,133,.5)"; ctx.lineWidth = 1; ctx.setLineDash([3, 5]); v.path(ctx, ips.map((p) => [p.x, p.y])); ctx.stroke(); ctx.setLineDash([]); }
+      for (const k of h?.geometry?.key_points || []) {
+        if (k.kind === "IP") continue;
         const [sx, sy] = v.toScreen(k.x, k.y);
-        ctx.fillStyle = "#34d399"; ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = k.kind === "SC" || k.kind === "CS" ? "#a7f3d0" : "#34d399"; ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI * 2); ctx.fill();
+        if (v.scale > 0.3) { ctx.fillStyle = "#6ee7b7"; ctx.font = "10px system-ui"; ctx.fillText(k.kind, sx + 4, sy + 10); }
       }
     } });
-
     layers.push({ id: "cursor", label: "Station", visible: true, draw: (ctx, v) => {
-      const s = this.cursor;
-      if (!s) return;
+      const s = this.cursor; if (!s) return;
       const nx = -Math.sin(s.dir), ny = Math.cos(s.dir), hw = this.halfWidth;
       ctx.strokeStyle = "#38bdf8"; ctx.lineWidth = 1.5;
       v.path(ctx, [[s.x - nx * hw, s.y - ny * hw], [s.x + nx * hw, s.y + ny * hw]]); ctx.stroke();
-      const [sx, sy] = v.toScreen(s.x, s.y);
-      ctx.fillStyle = "#38bdf8"; ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI * 2); ctx.fill();
+      const [sx, sy] = v.toScreen(s.x, s.y); ctx.fillStyle = "#38bdf8"; ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI * 2); ctx.fill();
     } });
-
+    for (const l of layers) if (prevVis.has(l.id)) l.visible = prevVis.get(l.id)!;
     this.plan.layers = layers;
+    // IP handles are draggable on the alignment stage
+    this.plan.handles = this.activeStage === "alignment" ? this.editIps.map((p, i) => ({ id: `ip${i}`, x: p.x, y: p.y, label: p.label || String(i) })) : [];
+    // toolbar
+    this.toolbar.innerHTML = "";
     for (const l of layers.filter((x) => x.id !== "cursor")) {
       const cb = el("input", { type: "checkbox", checked: l.visible });
       cb.addEventListener("change", () => { l.visible = cb.checked; this.plan.requestRender(); });
-      toolbar.appendChild(el("label", { class: "check chip" }, cb, l.label));
+      this.toolbar.appendChild(el("label", { class: "check chip" }, cb, l.label));
     }
-    toolbar.appendChild(button("Fit", () => this.fit(), "btn small"));
-    if (this.alignment && this.centre) toolbar.appendChild(button("Fit alignment", () => this.plan.fit(polyBounds(this.centre!.xy)), "btn small"));
-    if (!alignments.length) toolbar.appendChild(el("span", { class: "muted chip" }, "no alignment yet - draw one in the terrain workspace"));
-    this.fit();
+    this.toolbar.appendChild(button("Fit", () => this.fitAll(), "btn small"));
+    if (this.centre) this.toolbar.appendChild(button("Fit alignment", () => this.fitAlignment(), "btn small"));
+    if (!this.plan.layers.length || this.plan.scale === 1) this.fitAll();
+    this.plan.requestRender();
   }
 
-  private fit(): void {
+  private fitted = false;
+  private fitAll(): void {
     const b = this.run && this.run.bounds.every((x) => x != null) ? (this.run.bounds as number[]) : this.project.summary?.bounds;
-    if (b) this.plan.fit(b);
+    if (b) { this.plan.fit(b); this.fitted = true; }
   }
 
-  // ------------------------------------------------------------------ status / chainage
+  fitAlignment(): void { if (this.centre) this.plan.fit(polyBounds(this.centre.xy)); }
+
+  // ================================================================== status / chainage
   private stationAt(x: number, y: number): { chainage: number; offset: number; x: number; y: number; dir: number } | null {
     const c = this.centre;
     if (!c) return null;
-    let best = Infinity, bd = 0, bx = 0, by = 0, bdir = 0, boff = 0;
+    let best = Infinity, bch = 0, bx = 0, by = 0, bdir = 0, boff = 0;
     for (let i = 0; i + 1 < c.xy.length; i++) {
       const [ax, ay] = c.xy[i], [bx2, by2] = c.xy[i + 1];
       const vx = bx2 - ax, vy = by2 - ay, L2 = vx * vx + vy * vy || 1e-12;
       const t = Math.min(1, Math.max(0, ((x - ax) * vx + (y - ay) * vy) / L2));
       const px = ax + t * vx, py = ay + t * vy;
       const d2 = (px - x) ** 2 + (py - y) ** 2;
-      if (d2 < best) { best = d2; bd = c.d[i] + t * Math.sqrt(L2); bx = px; by = py; bdir = Math.atan2(vy, vx); boff = Math.sign(vx * (y - ay) - vy * (x - ax)) * Math.sqrt(d2); }
+      if (d2 < best) { best = d2; bch = c.ch[i] + t * (c.ch[i + 1] - c.ch[i]); bx = px; by = py; bdir = Math.atan2(vy, vx); boff = Math.sign(vx * (y - ay) - vy * (x - ax)) * Math.sqrt(d2); }
     }
-    return { chainage: c.start + bd, offset: -boff, x: bx, y: by, dir: bdir }; // positive offset = right of travel
+    return { chainage: bch, offset: -boff, x: bx, y: by, dir: bdir };
   }
 
   private updateStatus(x: number, y: number): void {
     const parts = [`E ${fmt(x, 2)}`, `N ${fmt(y, 2)}`];
     const s = this.stationAt(x, y);
-    if (s && Math.abs(s.offset) < 500) parts.push(`CH ${fmtChainage(s.chainage)}`, `offset ${s.offset >= 0 ? "R" : "L"} ${fmt(Math.abs(s.offset), 2)}`);
+    if (s && Math.abs(s.offset) < 500) {
+      parts.push(`CH ${fmtChainage(s.chainage)}`, `offset ${s.offset >= 0 ? "R" : "L"} ${fmt(Math.abs(s.offset), 2)}`);
+      const v = this.data.vertical;
+      if (v?.line?.length) { const dz = interpLine(v.line, s.chainage); if (dz != null) parts.push(`design RL ${fmt(dz, 3)}`); }
+    }
     this.statusEl.textContent = parts.join("   ");
     if (this.run) {
       if (this.rlTimer) window.clearTimeout(this.rlTimer);
       this.rlTimer = window.setTimeout(async () => {
         try {
-          const r = await api.tin.elevation(this.project.id, this.run!.id, x, y);
+          const r = await api.tin.elevation(this.pid, this.run!.id, x, y);
           if (!this.destroyed && this.statusEl.textContent?.startsWith(`E ${fmt(x, 2)}`)) this.statusEl.textContent += `   ground RL ${r.inside ? fmt(r.z, 3) : "outside TIN"}`;
         } catch { /* ignore */ }
       }, 180);
     }
   }
 
-  // ------------------------------------------------------------------ profile & section
-  private async loadProfile(): Promise<void> {
-    const c = this.centre, run = this.run;
-    if (!c || !run) {
-      this.profileEl.innerHTML = `<p class="muted" style="padding:20px">${!run ? "No TIN run: build a TIN in the terrain workspace first." : "No seed alignment: pick or draw one in the terrain workspace, then choose it under Alignment."}</p>`;
+  // ================================================================== profile
+  renderProfile(): void {
+    const ground: ProfilePoint[] = (this.previewGround ?? this.data.ground?.points ?? []).map((p: any) => ({ chainage: p.chainage, x: p.x, y: p.y, z: p.z, source: "edge" }));
+    const v = this.data.vertical;
+    if (!ground.length && !v?.line?.length) {
+      this.profileEl.innerHTML = `<p class="muted" style="padding:20px">${!this.run ? "No TIN run: build a TIN in the terrain workspace first." : "No alignment yet: add IPs under Alignment (or seed the design from a project alignment)."}</p>`;
       return;
     }
-    const step = Math.max(1, Math.floor(c.xy.length / 2000));
-    const coords = c.xy.filter((_, i) => i % step === 0 || i === c.xy.length - 1);
-    try {
-      const r = await api.tin.profile(this.project.id, run.id, coords);
-      if (this.destroyed) return;
-      const pts: ProfilePoint[] = r.distance.map((d, i) => ({ chainage: c.start + d, x: r.xy[i][0], y: r.xy[i][1], z: r.z[i], source: "edge" }));
-      const markers = (this.alignment?.key_points || []).filter((k: any) => k.kind === "BC" || k.kind === "EC").map((k: any) => ({ chainage: k.chainage, label: `${k.kind} ${k.index}` }));
-      const res = renderProfile(this.profileEl, pts, { vScale: 5, markers, onHover: (p) => this.setCursor(p ? p.chainage : null) });
-      this.profileCursor = res.setCursor;
-    } catch (e) {
-      this.profileEl.innerHTML = `<p class="error" style="padding:20px">${e instanceof ApiError ? e.detail : String(e)}</p>`;
-    }
+    const info = new Map<number, any>((v?.table || []).map((r: any) => [r.index, r]));
+    const pvis = this.editPvis.map((p, i) => ({ index: i, chainage: p.chainage, z: p.elevation, length: p.length || 0, K: info.get(i)?.K ?? null, kind: info.get(i)?.kind }));
+    const markers = (this.data.horizontal?.geometry?.key_points || []).filter((k: any) => ["TS", "BC", "ST", "EC"].includes(k.kind)).map((k: any) => ({ chainage: k.chainage, label: k.kind }));
+    for (const s of this.editStructures) if (!s.kind.endsWith("wall") && s.kind !== "side_drain") markers.push({ chainage: s.from, label: s.kind === "culvert" ? "culvert" : "drain" });
+    const res = renderProfile(this.profileEl, ground, {
+      vScale: this.vScale, markers, designLine: v?.line, pvis,
+      domain: this.centre ? [this.centre.start, this.centre.end] : undefined,
+      onHover: (p) => this.setCursor(p ? p.chainage : null),
+      onPviDrag: (i, ch, z, phase) => {
+        const p = this.editPvis[i]; if (!p) return;
+        p.chainage = Math.round(ch * 100) / 100; p.elevation = Math.round(z * 1000) / 1000;
+        if (phase === "end") { this.markDirty("vertical"); void this.saveVertical(); }
+      },
+    });
+    this.profileCursor = res.setCursor;
   }
 
   private setCursor(chainage: number | null): void {
     if (!this.centre || chainage === null) { this.cursor = null; this.plan.requestRender(); return; }
-    const s = pointAtChainage(this.centre, chainage);
-    this.cursor = s;
+    this.cursor = pointAtChainage(this.centre, chainage);
     this.plan.requestRender();
   }
 
-  private async showSection(chainage: number): Promise<void> {
-    const c = this.centre, run = this.run;
+  // ================================================================== section
+  setStation(ch: number): void { void this.showSection(ch); }
+
+  async showSection(chainage: number): Promise<void> {
+    const c = this.centre;
     this.sectionHead.replaceChildren(
       el("b", {}, "Cross-section"),
       button("◀", () => void this.showSection(this.station - this.sectionInterval), "btn small"),
@@ -298,124 +666,100 @@ class RoadWorkspace implements ModuleInstance {
       (() => { const i = select([10, 20, 25, 50].map((v) => ({ value: String(v), label: `every ${v} m` })), String(this.sectionInterval)); i.addEventListener("change", () => { this.sectionInterval = Number(i.value); }); return i; })(),
       (() => { const w = select([10, 15, 20, 30, 50].map((v) => ({ value: String(v), label: `±${v} m` })), String(this.halfWidth)); w.addEventListener("change", () => { this.halfWidth = Number(w.value); void this.showSection(this.station); }); return w; })(),
     );
-    if (!c || !run) { this.sectionEl.innerHTML = '<p class="muted" style="padding:20px">Needs a TIN run and a seed alignment.</p>'; return; }
-    this.station = Math.min(Math.max(chainage, c.start), c.start + c.length);
+    if (!c || !this.run) { this.sectionEl.innerHTML = '<p class="muted" style="padding:20px">Needs a TIN run and an alignment.</p>'; return; }
+    this.station = Math.min(Math.max(chainage, c.start), c.end);
     const s = pointAtChainage(c, this.station);
     if (!s) return;
     this.cursor = s;
     this.plan.requestRender();
     this.profileCursor?.(this.station);
-    const nx = -Math.sin(s.dir), ny = Math.cos(s.dir), hw = this.halfWidth;
-    const line = [[s.x + nx * hw, s.y + ny * hw], [s.x, s.y], [s.x - nx * hw, s.y - ny * hw]]; // left -> centre -> right
     try {
-      const r = await api.tin.profile(this.project.id, run.id, line);
+      if (this.data.corridor) {
+        const sec = await api.road.section(this.pid, this.did, this.station);
+        if (this.destroyed) return;
+        const ground: number[][] = sec.ground;
+        const hw = Math.max(this.halfWidth, ...sec.design.map((p: number[]) => Math.abs(p[0])));
+        const section: Section = { chainage: sec.chainage, label: fmtChainage(sec.chainage), centre: [sec.x, sec.y], direction: sec.direction, left: hw, right: hw,
+          offset: ground.map((p) => p[0]), z: ground.map((p) => p[1]), xy: ground.map((p) => [sec.x + p[0] * Math.sin(sec.direction), sec.y - p[0] * Math.cos(sec.direction)]),
+          source: ground.map((p) => (Math.abs(p[0]) < 1e-6 ? "centre" : "edge")) };
+        renderSection(this.sectionEl, section, { vScale: 2, design: sec.design.map((p: number[]) => ({ offset: p[0], z: p[1] })),
+          title: `CH ${fmtChainage(sec.chainage)} · ${sec.template_id} · cut ${fmt(sec.cut_area, 2)} m² · fill ${fmt(sec.fill_area, 2)} m²${sec.flags?.length ? " · " + sec.flags.join(", ") : ""}` });
+        return;
+      }
+      const nx = -Math.sin(s.dir), ny = Math.cos(s.dir), hw = this.halfWidth;
+      const line = [[s.x + nx * hw, s.y + ny * hw], [s.x, s.y], [s.x - nx * hw, s.y - ny * hw]];
+      const r = await api.tin.profile(this.pid, this.run.id, line);
       if (this.destroyed) return;
       const sec: Section = { chainage: this.station, label: fmtChainage(this.station), centre: [s.x, s.y], direction: s.dir, left: hw, right: hw,
         offset: r.distance.map((d) => d - hw), z: r.z, xy: r.xy, source: r.distance.map((d) => (Math.abs(d - hw) < 1e-6 ? "centre" : "edge")) };
-      renderSection(this.sectionEl, sec, { vScale: 2 });
+      const v = this.data.vertical;
+      const dz = v?.line?.length ? interpLine(v.line, this.station) : null;
+      renderSection(this.sectionEl, sec, { vScale: 2, formationLevel: dz ?? undefined, title: `CH ${fmtChainage(this.station)} · ground${dz != null ? ` · design RL ${fmt(dz, 2)} (build the corridor for the full section)` : ""}` });
     } catch (e) {
       this.sectionEl.innerHTML = `<p class="error" style="padding:20px">${e instanceof ApiError ? e.detail : String(e)}</p>`;
     }
   }
 
-  // ------------------------------------------------------------------ stage panel
-  private renderStages(alignments: Alignment[]): void {
+  // ================================================================== stages
+  renderStage(): void {
     const host = this.stageHost;
     host.innerHTML = "";
     const stages = this.module?.stages?.length ? this.module.stages : [{ id: "alignment", label: "Alignment", description: "" }];
+    const status: Record<string, any> = this.data.overview?.stages || {};
     const list = el("div", { class: "stage-list" });
     stages.forEach((s, i) => {
-      const done = s.id === "alignment" && this.alignment;
-      list.appendChild(el("div", { class: `stage${s.id === this.activeStage ? " active" : ""}`, onClick: () => { this.activeStage = s.id; this.renderStages(alignments); } },
-        el("span", { class: "num" }, String(i + 1)), el("span", { class: "label" }, s.label),
-        el("span", { class: "spacer" }),
-        el("span", { class: `badge ${done ? "ok" : ""}` }, done ? "seeded" : s.id === "alignment" ? "no alignment" : "planned")));
+      const st = status[s.id];
+      const badge = this.dirty.has(s.id === "profile" ? "vertical" : s.id === "alignment" ? "horizontal" : s.id) ? el("span", { class: "badge warn" }, "unsaved")
+        : st ? el("span", { class: `badge ${st.status === "done" ? "ok" : st.status === "stale" ? "warn" : ""}` }, st.status) : null;
+      list.appendChild(el("div", { class: `stage${s.id === this.activeStage ? " active" : ""}`, title: st?.detail || s.description, onClick: () => { this.activeStage = s.id; this.renderStage(); this.buildPlan(); } },
+        el("span", { class: "num" }, String(i + 1)), el("span", { class: "label" }, s.label), el("span", { class: "spacer" }), badge));
     });
     host.append(el("h3", {}, "Design stages"), list);
     const content = el("div");
     host.appendChild(content);
-    const stage = stages.find((s) => s.id === this.activeStage) ?? stages[0];
-    if (stage.id === "alignment") this.renderAlignmentStage(content, alignments);
-    else content.append(el("div", { class: "card" }, el("h4", {}, stage.label), el("p", { class: "muted" }, stage.description),
-      el("p", { class: "hint" }, "This stage is part of the road engine, which is built after the legacy road software has been analysed. The workspace, terrain snapshot and stage flow are ready for it.")));
+    switch (this.activeStage) {
+      case "alignment": renderAlignmentStage(content, this); break;
+      case "profile": renderProfileStage(content, this); break;
+      case "templates": renderTemplatesStage(content, this); break;
+      case "earthworks": renderEarthworksStage(content, this); break;
+      case "structures": renderStructuresStage(content, this, false); break;
+      case "drainage": renderStructuresStage(content, this, true); break;
+      case "output": renderOutputStage(content, this); break;
+      default: content.appendChild(el("p", { class: "muted" }, "Unknown stage"));
+    }
+    content.appendChild(el("div", { class: "btn-row", style: "margin-top:8px" }, button("Open terrain workspace", () => { location.hash = terrainHash(this.pid); }, "btn small")));
   }
 
-  private renderAlignmentStage(host: HTMLElement, alignments: Alignment[]): void {
-    const pid = this.project.id;
-    const run = this.run;
-    const newer = this.runs.filter((r) => run && r.id > run.id);
-    const snap = el("div", { class: "card" }, el("h4", {}, "Terrain snapshot"),
-      run ? el("dl", { class: "kv" },
-        el("dt", {}, "TIN run"), el("dd", {}, `${run.id}${run.name ? " · " + run.name : ""}`),
-        el("dt", {}, "triangles"), el("dd", {}, `${run.n_triangles} (${run.n_nodes} nodes)`),
-        el("dt", {}, "RL"), el("dd", {}, `${fmt(run.z_range[0] ?? undefined, 2)} – ${fmt(run.z_range[1] ?? undefined, 2)}`),
-        el("dt", {}, "created"), el("dd", {}, new Date(run.created).toLocaleString())) : el("p", { class: "muted" }, "No TIN run yet."),
-      newer.length ? el("div", { class: "terrain-badge stale" }, `Newer terrain available: run ${newer[newer.length - 1].id}`, button("Rebase", async () => {
-        try { this.design = await api.designs.patch(pid, this.design.id, { tin_run_id: newer[newer.length - 1].id }); toast(`Design rebased onto run ${this.design.tin_run_id}`, "ok"); await this.init(); }
-        catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); }
-      }, "btn small")) : el("div", { class: "terrain-badge" }, "Up to date with the latest terrain"),
-      el("div", { class: "btn-row" }, button("Open terrain workspace", () => { location.hash = terrainHash(pid); }, "btn small")));
-
-    const alSel = select([{ value: "", label: "— none —" }, ...alignments.map((a) => ({ value: String(a.id), label: `${a.name} (${(a.length / 1000).toFixed(2)} km)` }))], String(this.design.alignment_id ?? ""));
-    alSel.addEventListener("change", async () => {
-      try {
-        this.design = await api.designs.patch(pid, this.design.id, { alignment_id: alSel.value ? Number(alSel.value) : null });
-        await this.init();
-      } catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); }
-    });
-    const al = this.alignment;
-    const ipTable = el("table", { class: "data" }, el("tr", {}, el("th", {}, "#"), el("th", {}, "X"), el("th", {}, "Y"), el("th", {}, "R")));
-    if (al) for (const [i, ip] of al.ips.entries()) ipTable.appendChild(el("tr", {}, el("td", {}, ip.label || String(i)), el("td", {}, fmt(ip.x, 3)), el("td", {}, fmt(ip.y, 3)), el("td", {}, ip.radius ? fmt(ip.radius, 1) : "–")));
-    const seed = el("div", { class: "card" }, el("h4", {}, "Horizontal alignment"),
-      field("Seed alignment (from the terrain workspace)", alSel, "The design owns a copy from here on; IP editing with standards checks arrives with the road engine."),
-      al ? el("dl", { class: "kv" }, el("dt", {}, "length"), el("dd", {}, `${fmt(al.length, 2)} m`), el("dt", {}, "chainage"), el("dd", {}, `${fmtChainage(al.start_chainage)} – ${fmtChainage(al.end_chainage)}`),
-        el("dt", {}, "curves"), el("dd", {}, `${al.ips.filter((p) => p.radius > 0).length}`), el("dt", {}, "valid"), el("dd", {}, al.valid ? "yes" : `${al.issues.length} issues`)) : null,
-      al ? ipTable : null);
-
-    const st = this.design.settings || {};
-    const cls = select(ROAD_CLASSES.map(([v, l]) => ({ value: v, label: l })), String(st.road_class ?? "feeder"));
-    const ter = select(TERRAINS.map(([v, l]) => ({ value: v, label: l })), String(st.terrain ?? "rolling"));
-    const spd = select(SPEEDS.map((v) => ({ value: String(v), label: `${v} km/h` })), String(st.design_speed ?? 40));
-    const save = async () => {
-      try { this.design = await api.designs.patch(pid, this.design.id, { settings: { road_class: cls.value, terrain: ter.value, design_speed: Number(spd.value) } }); toast("Design parameters saved", "ok"); }
-      catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); }
-    };
-    for (const s of [cls, ter, spd]) s.addEventListener("change", () => void save());
-    const params = el("div", { class: "card" }, el("h4", {}, "Design parameters"),
-      field("Road class", cls), field("Terrain", ter), field("Design speed", spd),
-      el("p", { class: "hint" }, "Stored with the design. The standards tables (Nepal Road Standard, DoR) that turn these into minimum radius, gradient and width checks load in the road engine."));
-    host.append(snap, seed, params);
-  }
-
-  // ------------------------------------------------------------------ new design
+  // ================================================================== new design from the switcher
   private async newDesign(moduleId: string): Promise<void> {
     if (!this.run) { toast("Build a TIN first", "error"); return; }
     const name = prompt("Name for the new design", `${moduleId} design`);
     if (name === null) return;
     try {
-      const d = await api.designs.create(this.project.id, { module: moduleId, name, tin_run_id: this.run.id, alignment_id: this.design.alignment_id });
-      location.hash = designHash(this.project.id, d);
-    } catch (e) { toast(e instanceof ApiError ? e.detail : String(e), "error"); }
+      const d = await api.designs.create(this.pid, { module: moduleId, name, tin_run_id: this.run.id, alignment_id: this.design.alignment_id });
+      location.hash = designHash(this.pid, d);
+    } catch (e) { err(e); }
   }
 }
 
 // ---------------------------------------------------------------------- geometry helpers
-function centreline(al: Alignment): Centreline {
-  const xy = densify(al, 2.0, 2);
-  const d = [0];
-  for (let i = 1; i < xy.length; i++) d.push(d[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
-  return { xy, d, length: d[d.length - 1], start: al.start_chainage };
+function pointAtChainage(c: Centreline, chainage: number): { x: number; y: number; dir: number } | null {
+  if (c.xy.length < 2 || chainage < c.start - 1e-6 || chainage > c.end + 1e-6) return null;
+  let i = 0;
+  while (i + 2 < c.xy.length && c.ch[i + 1] < chainage) i++;
+  const [ax, ay] = c.xy[i], [bx, by] = c.xy[i + 1];
+  const L = c.ch[i + 1] - c.ch[i] || 1e-12;
+  const f = Math.min(1, Math.max(0, (chainage - c.ch[i]) / L));
+  return { x: ax + f * (bx - ax), y: ay + f * (by - ay), dir: Math.atan2(by - ay, bx - ax) };
 }
 
-function pointAtChainage(c: Centreline, chainage: number): { x: number; y: number; dir: number } | null {
-  const t = chainage - c.start;
-  if (t < -1e-6 || t > c.length + 1e-6 || c.xy.length < 2) return null;
-  let i = 0;
-  while (i + 2 < c.xy.length && c.d[i + 1] < t) i++;
-  const [ax, ay] = c.xy[i], [bx, by] = c.xy[i + 1];
-  const L = c.d[i + 1] - c.d[i] || 1e-12;
-  const f = Math.min(1, Math.max(0, (t - c.d[i]) / L));
-  return { x: ax + f * (bx - ax), y: ay + f * (by - ay), dir: Math.atan2(by - ay, bx - ax) };
+function interpLine(line: { chainage: number; z: number }[], ch: number): number | null {
+  if (!line.length || ch < line[0].chainage || ch > line[line.length - 1].chainage) return null;
+  let lo = 0, hi = line.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (line[m].chainage <= ch) lo = m; else hi = m; }
+  const a = line[lo], b = line[hi];
+  const t = (ch - a.chainage) / ((b.chainage - a.chainage) || 1);
+  return a.z + t * (b.z - a.z);
 }
 
 function polyBounds(xy: number[][]): number[] {

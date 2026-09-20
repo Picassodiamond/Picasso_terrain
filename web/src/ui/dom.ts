@@ -65,9 +65,9 @@ export function numberInput(value: number, attrs: Attrs = {}): HTMLInputElement 
   return el("input", { type: "number", value: String(value), step: "any", ...attrs });
 }
 
-export function select(options: { value: string; label: string }[], value?: string, attrs: Attrs = {}): HTMLSelectElement {
+export function select(options: { value: string; label: string; title?: string }[], value?: string, attrs: Attrs = {}): HTMLSelectElement {
   const s = el("select", attrs);
-  for (const o of options) s.appendChild(el("option", { value: o.value, selected: o.value === value }, o.label));
+  for (const o of options) s.appendChild(el("option", { value: o.value, selected: o.value === value, title: o.title }, o.label));
   return s;
 }
 

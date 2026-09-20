@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrain module - Picasso LandMesh help</title>
+<link rel="stylesheet" href="help.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='2,28 12,6 20,18 26,10 30,28' fill='%23f59e0b'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html"><span>▲</span> Picasso LandMesh · Help</a>
+  <nav>
+    <a href="index.html">Getting started</a>
+    <a class="active" href="terrain.html">Terrain module</a>
+    <a href="road.html">Road design</a>
+    <a href="standards.html">Standards &amp; checks</a>
+    <a href="accounts.html">Accounts &amp; sharing</a>
+    <a href="faq.html">Troubleshooting</a>
+  </nav>
+  <a class="app" href="/">Open the app</a>
+</header>
+
+<div class="wrap">
+<aside class="toc">
+  <h4>On this page</h4>
+  <a href="#tour">Workspace tour</a>
+  <a href="#layers">Layers panel</a>
+  <a href="#data">Data: importing and drawing</a>
+  <a href="#crs">Coordinate system and base map</a>
+  <a href="#tin">Constraints and the TIN</a>
+  <a class="sub" href="#modes">The three constraint modes</a>
+  <a class="sub" href="#quality">Triangle quality and rejected triangles</a>
+  <a href="#contours">Contours</a>
+  <a href="#alignment">Alignments</a>
+  <a href="#sections">Profile and cross-sections</a>
+  <a href="#export">Export</a>
+  <a href="#large">Large surveys</a>
+</aside>
+
+<main>
+<h1>Terrain module</h1>
+<p class="lead">From survey points to a validated terrain model, contours, alignments and sections. Everything in this workspace is about the ground; the design work happens in the <a href="road.html">Road design</a> module.</p>
+
+<h2 id="tour">Workspace tour</h2>
+<figure><img src="img/terrain-overview.jpg" alt="Terrain workspace overview"><figcaption>Side panel with tabs (left), 3-D map (centre), layers panel (top right), status bar (bottom).</figcaption></figure>
+<table>
+  <tr><th>Control</th><th>What it does</th></tr>
+  <tr><td><b>Base map</b></td><td>OpenStreetMap, OpenTopoMap, Carto dark, Esri imagery or none. Only available when the project has a real coordinate system or a placed local grid.</td></tr>
+  <tr><td><b>View</b></td><td>3D (tilt and rotate with the right mouse button), 2D (plan) or 2.5D (Columbus view).</td></tr>
+  <tr><td><b>Height</b></td><td><i>On base map</i> drops the lowest survey point onto the base map so the terrain sits on the imagery; <i>True elevation</i> shows real heights above the ellipsoid. This changes the display only: levels, contours and sections keep their surveyed values.</td></tr>
+  <tr><td><b>Zoom to data</b>, <b>Top</b></td><td>Frame the survey; look straight down.</td></tr>
+  <tr><td><b>Charts</b></td><td>Opens the chart pane with the profile and cross-sections of the selected section set.</td></tr>
+  <tr><td>Status bar</td><td>Easting, northing and the terrain level under the cursor; the job indicator and, when the server is busy, a banner.</td></tr>
+</table>
+<div class="tip"><b>Mouse.</b> Left drag pans, wheel zooms, right drag (or Ctrl + left drag) tilts and rotates in 3D. Clicking a point shows its number, level and remark; clicking an IP opens the alignment; clicking a comment pin opens the Team tab.</div>
+
+<h2 id="layers">Layers panel</h2>
+<figure class="half"><img src="img/terrain-layers.jpg" alt="Layers panel"><figcaption>The Layers panel groups the map layers; counts update as you work. Use the – button to collapse it.</figcaption></figure>
+<ul>
+  <li><b>Survey data</b>: points, point numbers / RL, feature lines, boundary, voids, digitised contours.</li>
+  <li><b>Terrain</b>: TIN surface (coloured by elevation), TIN outline, issue markers, rejected triangles.</li>
+  <li><b>Contours</b> and contour labels; <b>Alignment</b> with chainage labels and BC / MC / EC markers; <b>Sections</b> lines; <b>Team</b> comment pins.</li>
+</ul>
+
+<h2 id="data">Data: importing and drawing</h2>
+<figure class="half"><img src="img/terrain-data.jpg" alt="Data tab"><figcaption>Data tab: import, draw constraint lines, review the constraint list, contents.</figcaption></figure>
+<h3>Import survey data</h3>
+<ol>
+  <li>Choose the file: CSV, TXT or XYZ (<code>x y z [remark]</code> or <code>id x y z remark</code>, header optional), XLSX, GeoJSON or DXF. For text files pick the delimiter (or auto-detect) and whether there is a header row; the <b>column mapping</b> shows which 0-based column is used for number, easting, northing, level and remark and can be edited as JSON.</li>
+  <li>Give the imported points a <b>layer name</b> (default <code>Points</code>) so several surveys can be told apart. For DXF open <b>DXF options</b> and give the <b>point layers</b> (points and point blocks with attributes) and the <b>feature-line layers</b>; polylines on layers named like <code>Boundary</code>, <code>Void</code> or <code>Contour</code> become constraint lines of that kind.</li>
+  <li>Tick <b>Replace existing points and lines</b> to start over instead of adding to the project, then press <b>Import</b>. Duplicates within the duplicate tolerance are merged; the Contents card shows what the project now holds.</li>
+</ol>
+<h3>Draw constraint lines</h3>
+<p>Choose <b>Boundary</b>, <b>Hole / void</b> or <b>Breakline</b> and click the vertices on the map; double-click or <kbd>Esc</kbd> finishes. Every line is listed under <b>Constraint lines</b>, where you can change its kind, hide it or delete it. Dashed lines are automatic suggestions in use.</p>
+<table>
+  <tr><th>Kind</th><th>Effect on the terrain model</th></tr>
+  <tr><td><b>Boundary</b></td><td>Limits the TIN: nothing is triangulated outside. Several boundaries can be nested.</td></tr>
+  <tr><td><b>Hole / void</b></td><td>Excludes an area (a building, a pond, an unsurveyed patch). Islands inside a hole are supported.</td></tr>
+  <tr><td><b>Breakline</b></td><td>A ridge, a drain, a kerb: triangle edges follow the line and never cross it. Breakline levels come from the TIN when the line has no Z.</td></tr>
+</table>
+
+<h2 id="crs">Coordinate system and base map</h2>
+<figure class="half"><img src="img/terrain-settings.jpg" alt="Settings tab"><figcaption>Settings: name, tags, coordinate system, local grid placement, archive.</figcaption></figure>
+<p>The Settings tab lists the <b>Nepal coordinate systems</b> (MUTM 81, 84 and 87 and UTM 44 N / 45 N) and accepts any EPSG code or PROJ string as a custom system. A project on a <b>local grid</b> has no position on the Earth, so the base map is disabled; enter the longitude and latitude of one known survey point together with its local easting and northing under <b>Place the local grid on the map</b> to orient it on OpenStreetMap (accuracy of a few metres, for orientation only).</p>
+
+<h2 id="tin">Constraints and the TIN</h2>
+<figure class="half"><img src="img/terrain-tin.jpg" alt="TIN tab"><figcaption>TIN tab: constraint mode, triangulation parameters, tools and the list of TIN runs.</figcaption></figure>
+<div class="flow"><span>points</span><i>→</i><span>automatic analysis</span><i>→</i><span>suggested constraints</span><i>→</i><span>your review</span><i>→</i><span>constrained TIN</span><i>→</i><span>validated triangles</span><i>→</i><span>contours</span></div>
+<h3 id="modes">The three constraint modes</h3>
+<ul>
+  <li><b>Automatic - detect survey limit and gaps.</b> When no boundary exists, <b>Build TIN</b> finds the survey limit and unsurveyed gaps itself, stores them as constraint lines (dashed) and uses them. Good for a quick first model.</li>
+  <li><b>Semi-automatic - review suggestions first.</b> <b>Detect constraints</b> lists each suggestion with its reason and confidence. Untick what you do not want and press <b>Accept selected</b>; accepted lines become ordinary constraints you can edit later.</li>
+  <li><b>Manual - drawn / imported constraints only.</b> Nothing is guessed; only your lines are used.</li>
+</ul>
+<h3 id="quality">Triangle quality and rejected triangles</h3>
+<ul>
+  <li>The <b>Use breaklines / boundary / hole</b> boxes decide which constraint kinds take part in this build; <b>Discard points with Z = 0</b> drops the zero levels legacy exports contain.</li>
+  <li><b>Boundary rule</b>: <i>constraints + nesting</i> (recommended) treats boundaries, holes and islands exactly; <i>legacy</i> deletes triangles that cross the lines, as the old software did.</li>
+  <li>Under <b>Edge triangle filters</b>: <b>max edge length</b> or the <b>long-edge factor</b> (times the median edge) and <b>min angle</b> peel long or sliver triangles from the outer edge inwards. Triangles along a constraint line are never removed.</li>
+  <li><b>Duplicate tolerance</b> merges points closer than this distance; <b>Name</b> labels the run in the list.</li>
+</ul>
+<figure><img src="img/terrain-rejected.jpg" alt="Rejected triangles shown on the map"><figcaption>Switch on <b>Rejected triangles</b> in the Layers panel to see what was peeled and why. The run card lists the counts per reason and the validation result.</figcaption></figure>
+<p>Every build is kept as a <b>TIN run</b>. Contours, sections and designs refer to a run, so you can rebuild the terrain without losing earlier work. <b>Spot height</b> and <b>Quick profile</b> under Tools read levels from the selected run by clicking on the map.</p>
+
+<h2 id="contours">Contours</h2>
+<figure class="half"><img src="img/terrain-contours.jpg" alt="Contours tab"><figcaption>Contours: interval, index contours, smoothing, labels and colours; existing sets with their style.</figcaption></figure>
+<ul>
+  <li><b>Interval</b> and <b>Index every N</b> (major contours); an optional <b>datum / base</b> shifts the levels the contours are drawn at.</li>
+  <li><b>Smoothing</b>: none (exact on the TIN) or Chaikin (rounded). <b>Min. length</b> drops tiny closed loops; <b>min. vertex spacing</b> thins dense lines.</li>
+  <li><b>Labels</b>: every so many metres, with a format, prefix and suffix (for example <code>RL 1850 m</code>) and a text height for DXF.</li>
+  <li><b>Colours</b>: major / minor colours or a colour ramp by elevation, line widths and opacity. <b>Apply</b> changes the style of an existing set without regenerating it.</li>
+</ul>
+<div class="note"><b>Contours only come from the validated TIN.</b> They pass exactly through vertices, close properly and never duplicate, because the same triangles that pass validation are the ones contoured. Rejected triangles are never contoured.</div>
+
+<h2 id="alignment">Alignments</h2>
+<div class="two">
+  <figure><img src="img/terrain-alignment.jpg" alt="Alignment tab"><figcaption>Alignment tab with an alignment opened: IP table, chainage labels, comments.</figcaption></figure>
+  <figure><img src="img/terrain-alignment-map.jpg" alt="Alignment on the map"><figcaption>The alignment on the map with IPs, curves and chainage ticks.</figcaption></figure>
+</div>
+<ol>
+  <li><b>＋ New alignment (draw on map)</b>: give a name and start chainage, then <b>Add IPs on map</b>. Click the IPs in order; drag an IP to move it; type the radius of each intermediate IP (the first and last IP carry no curve). Double-click or <kbd>Esc</kbd> stops adding.</li>
+  <li><b>Save</b> with a short change note; every version is kept under <b>History</b>. Open an alignment card to see its length, status and the curve data per IP (R, deflection, T, L, BC and EC chainages); <b>Edit</b> changes it, <b>Zoom</b> frames it.</li>
+  <li><b>Download CSV</b> writes the alignment file (<code>*_aln.csv</code>); <b>Import alignment</b> reads such a file, a GeoJSON line or a DXF <code>H_ALIGN</code> polyline, with a start chainage.</li>
+  <li><b>Open in Road design ▸</b> creates a road design seeded from this alignment on the latest TIN run.</li>
+</ol>
+<div class="note"><b>One editor at a time.</b> Editing an alignment takes a turn (lock). Colleagues see who is editing; <b>Release turn</b> hands it over and the owner can <b>Force release</b> a stale lock.</div>
+
+<h2 id="sections">Profile and cross-sections</h2>
+<figure><img src="img/terrain-sections.jpg" alt="Sections tab with the chart pane"><figcaption>Section set opened: the profile and the current cross-section in the chart pane, section lines on the map.</figcaption></figure>
+<p>Choose the alignment and the TIN run, the <b>profile station interval</b>, the <b>section interval</b>, the left and right widths and any <b>extra chainages</b> (for example <code>1+250, 1+275.5</code>), then <b>Generate profile &amp; cross-sections</b>. Browse stations with <b>◀ ▶</b> or the arrow keys, or click a section line on the map; hovering the charts shows the position on the map. <b>Profile.csv</b>, <b>Cross.csv</b> and <b>DXF (plan)</b> export the set.</p>
+
+<h2 id="export">Export</h2>
+<figure class="half"><img src="img/terrain-export.jpg" alt="Export tab"><figcaption>Export tab: DXF for AutoCAD with layer options, GeoJSON, GeoPackage and points CSV.</figcaption></figure>
+<ul>
+  <li><b>DXF</b>: points with the legacy <code>POINTS</code> block (number, remark, level as attributes), TIN faces, contours on <code>Contour</code> / <code>Index_Contour</code> with labels, feature lines and boundary, alignments on <code>H_ALIGN</code> with true arcs, IP labels and chainage ticks, cross-section lines. Set the text height in drawing units. Open in AutoCAD with <code>OPEN</code> or insert with <code>ATTACH</code>.</li>
+  <li><b>GeoPackage</b> opens directly in QGIS with points, lines, contours, alignments and section lines as layers. <b>GeoJSON</b> holds everything in one collection; <b>Points CSV</b> the merged points.</li>
+</ul>
+<div class="warn"><b>Guests cannot download.</b> Exports are for signed-in users; previews and the workspace itself are free.</div>
+
+<h2 id="large">Large surveys</h2>
+<p>Surveys of several hundred thousand points work: points stream to the map in a compact binary form, the terrain is drawn in tiles and the TIN is cached on the server. Builds on large surveys queue behind other jobs; the panel shows your position and an estimate. If a build would not fit in the server's memory it is refused with a message instead of failing halfway.</p>
+
+<footer>Picasso LandMesh help · updated 2026-09-20</footer>
+</main>
+</div>
+</body>
+</html>

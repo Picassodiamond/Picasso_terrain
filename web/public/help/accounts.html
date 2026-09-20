@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Accounts and sharing - Picasso LandMesh help</title>
+<link rel="stylesheet" href="help.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='2,28 12,6 20,18 26,10 30,28' fill='%23f59e0b'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html"><span>▲</span> Picasso LandMesh · Help</a>
+  <nav>
+    <a href="index.html">Getting started</a>
+    <a href="terrain.html">Terrain module</a>
+    <a href="road.html">Road design</a>
+    <a href="standards.html">Standards &amp; checks</a>
+    <a class="active" href="accounts.html">Accounts &amp; sharing</a>
+    <a href="faq.html">Troubleshooting</a>
+  </nav>
+  <a class="app" href="/">Open the app</a>
+</header>
+
+<div class="wrap">
+<aside class="toc">
+  <h4>On this page</h4>
+  <a href="#accounts">Accounts and signing in</a>
+  <a href="#guest">The guest sandbox</a>
+  <a href="#roles">Roles in a project</a>
+  <a href="#team">Sharing, comments and activity</a>
+  <a href="#library">The Library</a>
+  <a href="#archive">Archiving and backups</a>
+  <a href="#load">When the server is busy</a>
+  <a href="#admin">Administrator page</a>
+</aside>
+
+<main>
+<h1>Accounts and sharing</h1>
+<p class="lead">Accounts are created by the administrator. A project belongs to one owner, who shares it with editors and viewers. Finished terrain models and designs are archived and catalogued so they stay valuable over the years.</p>
+
+<h2 id="accounts">Accounts and signing in</h2>
+<ul>
+  <li>The administrator creates your account and gives you the <b>username and password</b>; there is no self-registration. Ask the administrator to reset a forgotten password.</li>
+  <li>Sign in from the projects page. Your name and role appear in the top right; <b>Sign out</b> ends the session.</li>
+  <li>Your account has a <b>role</b>: <i>user</i> for engineers and surveyors, <i>admin</i> for the people who manage accounts and can open every project.</li>
+</ul>
+
+<h2 id="guest">The guest sandbox</h2>
+<p>When the administrator has enabled it, visitors without an account can press <b>Continue as guest</b> and try the software in a private sandbox.</p>
+<table>
+  <tr><th>Guests can</th><th>Guests cannot</th></tr>
+  <tr><td>Create a few projects, import a limited number of points, build a limited number of terrain models, generate contours, draw alignments, cut sections, design a road and preview every drawing sheet</td><td>Download DXF, Excel, CSV or archives; share projects; keep projects beyond the sandbox lifetime (they are deleted after some days)</td></tr>
+</table>
+<p>The exact limits are shown in the yellow banner on the projects page. Guest jobs run after the jobs of signed-in users. <b>Signing in claims your sandbox projects</b>: everything you made as a guest is transferred to your account.</p>
+
+<h2 id="roles">Roles in a project</h2>
+<table>
+  <tr><th>Role</th><th>Can</th></tr>
+  <tr><td><b>Owner</b> (one per project)</td><td>Everything: change data and designs, add or remove members, change roles, change visibility, transfer ownership, archive, restore and delete the project. Administrators have the same rights everywhere.</td></tr>
+  <tr><td><b>Editor</b></td><td>Import and edit data, build terrain models, generate contours, edit alignments and designs, build corridors, export.</td></tr>
+  <tr><td><b>Viewer</b></td><td>Open the project, browse the map, charts and designs, preview drawings, export, post comments.</td></tr>
+</table>
+<p>The badge on a project card shows your role. A project can be <b>private</b> (members only), visible to your <b>organisation</b>, or <b>public</b> (anyone can view). Archived projects are read-only for everyone until the owner restores them.</p>
+
+<h2 id="team">Sharing, comments and activity</h2>
+<figure class="half"><img src="img/terrain-team.jpg" alt="Team tab"><figcaption>Team tab: visibility, members and roles, feedback pinned on the map, activity log.</figcaption></figure>
+<ul>
+  <li><b>Team &amp; sharing</b> (owner only): set the visibility, <b>Add member</b> by username with the editor or viewer role, change or remove members, <b>Transfer ownership…</b> to a colleague.</li>
+  <li><b>Feedback &amp; comments</b>: anyone with access can post a comment, optionally <b>pinned on the map</b> at a location or on an alignment at a chainage; replies form a thread and threads can be resolved. Pins are a map layer.</li>
+  <li><b>Activity</b> lists who did what and when: imports, builds, alignment edits with their change notes, corridor builds, exports.</li>
+  <li>Alignments are edited by one person at a time. The Alignment tab shows who holds the turn; the owner can force a release.</li>
+</ul>
+
+<h2 id="library">The Library</h2>
+<figure><img src="img/library.jpg" alt="Library"><figcaption>The Library catalogues every terrain model and design with its footprint on the map, searchable by text, tag and area.</figcaption></figure>
+<p>Every TIN run and every design you can see is listed with its footprint, size, coordinate system, tags and lineage. Search by name or tag, or pan the map to the area of interest. <b>Open</b> jumps to the project; <b>Clone into new project</b> copies a terrain model into a fresh project of your own, so old surveys and designs become reusable assets. Add <b>tags</b> (district, road name, year) to a project under Settings to make it easy to find.</p>
+
+<h2 id="archive">Archiving and backups</h2>
+<ul>
+  <li>The owner can <b>Archive project</b> under Settings. The project becomes read-only and a portable archive (a zip with the project database and its description) is written on the server; <b>Download archive (.zip)</b> gives you a copy. <b>Restore project</b> makes it editable again.</li>
+  <li>Archived projects are hidden from the projects page unless you tick <b>show archived</b>.</li>
+  <li>The administrator runs regular backups of the whole installation with the backup command; ask them before deleting anything you might need again.</li>
+</ul>
+
+<h2 id="load">When the server is busy</h2>
+<ul>
+  <li>Long operations are <b>jobs</b>. When several people work at once your job waits in a queue and the panel shows <i>waiting in queue: 2 of 3</i> with an estimate. One job per user runs at a time; guests wait behind account holders.</li>
+  <li>Some immediate operations (constraint detection, profiles, terrain tiles) can answer <i>server busy, retrying</i>: the browser retries by itself after a few seconds.</li>
+  <li>A very large build that would not fit in the server's memory is refused with a message; import fewer points or ask the administrator for a larger server.</li>
+  <li>The workspace shows a banner while the server is under heavy load.</li>
+</ul>
+
+<h2 id="admin">Administrator page</h2>
+<p>Administrators see an <b>Admin</b> button on the projects page. There they <b>create accounts</b> (username, password, role, organisation, full name, email, notes), <b>edit details</b>, set a <b>new password</b>, disable accounts and list every project. The same actions are available from the command line on the server for scripted setups.</p>
+
+<footer>Picasso LandMesh help · updated 2026-09-20</footer>
+</main>
+</div>
+</body>
+</html>

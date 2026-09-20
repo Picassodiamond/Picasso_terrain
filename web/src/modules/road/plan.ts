@@ -1,21 +1,25 @@
 /** 2-D plan view in project coordinates (metres, north up) on a canvas: pan, zoom, layers,
- *  scale bar and north arrow. Design work happens in plan and profile, not on a globe, so this
- *  view is CRS-agnostic and exact. A raster base map can be added later as a layer. */
+ *  scale bar, north arrow and draggable handles (IPs). Design work happens in plan and profile,
+ *  not on a globe, so this view is CRS-agnostic and exact. */
 
 export interface PlanLayer { id: string; label: string; visible: boolean; draw: (ctx: CanvasRenderingContext2D, v: PlanView) => void }
+export interface PlanHandle { id: string; x: number; y: number; radius?: number; label?: string; color?: string }
 
 export class PlanView {
   canvas: HTMLCanvasElement;
   layers: PlanLayer[] = [];
+  handles: PlanHandle[] = [];
   cx = 0;
   cy = 0;
   scale = 1; // pixels per metre
   onMove: ((x: number, y: number) => void) | null = null;
   onLeave: (() => void) | null = null;
   onClick: ((x: number, y: number) => void) | null = null;
+  onDrag: ((id: string, x: number, y: number, phase: "start" | "move" | "end") => void) | null = null;
   private ro: ResizeObserver;
   private raf = 0;
   private dragging: { px: number; py: number; cx: number; cy: number } | null = null;
+  private dragHandle: string | null = null;
   private moved = false;
 
   constructor(private host: HTMLElement) {
@@ -66,6 +70,16 @@ export class PlanView {
     if (close) ctx.closePath();
   }
 
+  hitHandle(px: number, py: number): PlanHandle | null {
+    let best: PlanHandle | null = null, bd = Infinity;
+    for (const h of this.handles) {
+      const [sx, sy] = this.toScreen(h.x, h.y);
+      const d = Math.hypot(sx - px, sy - py);
+      if (d <= (h.radius ?? 8) && d < bd) { best = h; bd = d; }
+    }
+    return best;
+  }
+
   // ------------------------------------------------------------------ rendering
   requestRender(): void {
     if (this.raf) return;
@@ -92,6 +106,13 @@ export class PlanView {
     ctx.fillRect(0, 0, this.width, this.height);
     this.drawGrid(ctx);
     for (const l of this.layers) if (l.visible) { ctx.save(); l.draw(ctx, this); ctx.restore(); }
+    for (const h of this.handles) {
+      const [sx, sy] = this.toScreen(h.x, h.y);
+      ctx.fillStyle = h.color || "#fb7185";
+      ctx.strokeStyle = "#0b1220"; ctx.lineWidth = 1.5;
+      ctx.fillRect(sx - 5, sy - 5, 10, 10); ctx.strokeRect(sx - 5, sy - 5, 10, 10);
+      if (h.label) { ctx.fillStyle = "#fecdd3"; ctx.font = "11px system-ui"; ctx.fillText(h.label, sx + 7, sy - 7); }
+    }
     this.drawScaleBar(ctx);
     this.drawNorth(ctx);
   }
@@ -143,30 +164,52 @@ export class PlanView {
 
   // ------------------------------------------------------------------ interaction
   private down = (e: PointerEvent): void => {
-    this.dragging = { px: e.clientX, py: e.clientY, cx: this.cx, cy: this.cy };
+    const rect = this.canvas.getBoundingClientRect();
+    const h = this.onDrag ? this.hitHandle(e.clientX - rect.left, e.clientY - rect.top) : null;
+    if (h) {
+      this.dragHandle = h.id;
+      this.onDrag?.(h.id, h.x, h.y, "start");
+    } else {
+      this.dragging = { px: e.clientX, py: e.clientY, cx: this.cx, cy: this.cy };
+    }
     this.moved = false;
     this.canvas.setPointerCapture(e.pointerId);
   };
 
   private move = (e: PointerEvent): void => {
     const rect = this.canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left, py = e.clientY - rect.top;
+    const [wx, wy] = this.toWorld(px, py);
+    if (this.dragHandle) {
+      this.moved = true;
+      const h = this.handles.find((k) => k.id === this.dragHandle);
+      if (h) { h.x = wx; h.y = wy; }
+      this.onDrag?.(this.dragHandle, wx, wy, "move");
+      this.requestRender();
+      return;
+    }
     if (this.dragging) {
       const dx = e.clientX - this.dragging.px, dy = e.clientY - this.dragging.py;
       if (Math.abs(dx) + Math.abs(dy) > 2) this.moved = true;
       this.cx = this.dragging.cx - dx / this.scale;
       this.cy = this.dragging.cy + dy / this.scale;
       this.requestRender();
+    } else {
+      this.canvas.style.cursor = this.onDrag && this.hitHandle(px, py) ? "grab" : "crosshair";
     }
-    const [wx, wy] = this.toWorld(e.clientX - rect.left, e.clientY - rect.top);
     this.onMove?.(wx, wy);
   };
 
   private up = (e: PointerEvent): void => {
-    if (this.dragging && !this.moved) {
-      const rect = this.canvas.getBoundingClientRect();
-      const [wx, wy] = this.toWorld(e.clientX - rect.left, e.clientY - rect.top);
-      this.onClick?.(wx, wy);
+    const rect = this.canvas.getBoundingClientRect();
+    const [wx, wy] = this.toWorld(e.clientX - rect.left, e.clientY - rect.top);
+    if (this.dragHandle) {
+      const id = this.dragHandle;
+      this.dragHandle = null;
+      this.onDrag?.(id, wx, wy, "end");
+      return;
     }
+    if (this.dragging && !this.moved) this.onClick?.(wx, wy);
     this.dragging = null;
   };
 
@@ -177,7 +220,6 @@ export class PlanView {
     const [wx, wy] = this.toWorld(px, py);
     const f = Math.exp(-e.deltaY * 0.0015);
     this.scale = Math.min(Math.max(this.scale * f, 1e-4), 1e4);
-    // keep the point under the cursor fixed
     const [nx, ny] = this.toWorld(px, py);
     this.cx += wx - nx;
     this.cy += wy - ny;

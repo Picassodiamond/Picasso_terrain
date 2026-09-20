@@ -14,6 +14,7 @@ dependencies = [
     "pyproj>=3.6",
     "triangle>=20230923",
     "ezdxf>=1.1",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +25,9 @@ plm = "plm.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["plm*"]
+
+[tool.setuptools.package-data]
+plm = ["design/standards/*.json", "design/sheets/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

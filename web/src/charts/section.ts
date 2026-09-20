@@ -7,6 +7,8 @@ export interface SectionChartOptions {
   vScale: number;
   onHover?: (p: { offset: number; z: number; x: number; y: number } | null) => void;
   formationLevel?: number | null;  // optional horizontal design level line
+  design?: { offset: number; z: number }[];   // corridor design polyline (daylight to daylight)
+  title?: string;
 }
 
 export function renderSection(container: HTMLElement, s: Section, opts: SectionChartOptions): void {
@@ -17,15 +19,17 @@ export function renderSection(container: HTMLElement, s: Section, opts: SectionC
   const w = width - margin.left - margin.right;
   const h = height - margin.top - margin.bottom;
   const pts = s.offset.map((o, i) => ({ offset: o, z: s.z[i], x: s.xy[i][0], y: s.xy[i][1], source: s.source[i] })).filter((p) => p.z !== null) as { offset: number; z: number; x: number; y: number; source: string }[];
+  const design = opts.design || [];
   const svg = d3.select(container).append("svg").attr("width", width).attr("height", height).attr("class", "chart");
-  svg.append("text").attr("class", "chart-title").attr("x", margin.left).attr("y", 16).text(`Cross-section  CH ${fmtChainage(s.chainage)}`);
+  svg.append("text").attr("class", "chart-title").attr("x", margin.left).attr("y", 16).text(opts.title ?? `Cross-section  CH ${fmtChainage(s.chainage)}`);
   if (!pts.length) {
     svg.append("text").attr("x", width / 2).attr("y", height / 2).attr("text-anchor", "middle").attr("fill", "#94a3b8").text("Section outside the TIN");
     return;
   }
-  const x = d3.scaleLinear().domain([-s.left, s.right]).range([0, w]);
-  const zmin = d3.min(pts, (p) => p.z)!, zmax = d3.max(pts, (p) => p.z)!;
-  const pxPerM = w / (s.left + s.right);
+  const offMin = Math.min(-s.left, ...design.map((p) => p.offset)), offMax = Math.max(s.right, ...design.map((p) => p.offset));
+  const x = d3.scaleLinear().domain([offMin, offMax]).range([0, w]);
+  const zmin = Math.min(d3.min(pts, (p) => p.z)!, ...design.map((p) => p.z)), zmax = Math.max(d3.max(pts, (p) => p.z)!, ...design.map((p) => p.z));
+  const pxPerM = w / (offMax - offMin);
   const zSpan = Math.max(h / (pxPerM * opts.vScale), (zmax - zmin) * 1.2, 0.5);
   const zMid = (zmin + zmax) / 2;
   const y = d3.scaleLinear().domain([zMid - zSpan / 2, zMid + zSpan / 2]).range([h, 0]);
@@ -47,6 +51,21 @@ export function renderSection(container: HTMLElement, s: Section, opts: SectionC
     .attr("cx", (p) => x(p.offset)).attr("cy", (p) => y(p.z)).attr("r", (p) => (p.source === "centre" ? 3.5 : 2));
   if (opts.formationLevel != null) {
     g.append("line").attr("class", "design-line").attr("x1", 0).attr("x2", w).attr("y1", y(opts.formationLevel)).attr("y2", y(opts.formationLevel));
+  }
+  if (design.length > 1) {
+    // cut / fill band between design and ground, the design polyline, daylight markers
+    const gz = (o: number) => {
+      const i = d3.bisector<{ offset: number }, number>((p) => p.offset).left(pts, o);
+      if (i <= 0) return pts[0].z; if (i >= pts.length) return pts[pts.length - 1].z;
+      const a = pts[i - 1], b = pts[i]; const t = (o - a.offset) / ((b.offset - a.offset) || 1);
+      return a.z + t * (b.z - a.z);
+    };
+    const band = d3.area<{ offset: number; z: number }>().x((p) => x(p.offset)).y0((p) => y(gz(p.offset))).y1((p) => y(p.z));
+    g.append("path").datum(design).attr("class", "design-band").attr("d", band);
+    g.append("path").datum(design).attr("class", "design-line").attr("d", d3.line<{ offset: number; z: number }>().x((p) => x(p.offset)).y((p) => y(p.z)));
+    for (const p of [design[0], design[design.length - 1]]) g.append("rect").attr("class", "daylight").attr("x", x(p.offset) - 3).attr("y", y(p.z) - 3).attr("width", 6).attr("height", 6);
+    const c0 = design.reduce((a, b) => (Math.abs(b.offset) < Math.abs(a.offset) ? b : a));
+    g.append("text").attr("class", "tip design").attr("x", x(c0.offset) + 4).attr("y", y(c0.z) - 6).text(`design ${c0.z.toFixed(2)}`);
   }
   // RL labels at ends and centre
   const label = (p: { offset: number; z: number }, dx: number, anchor: string) =>

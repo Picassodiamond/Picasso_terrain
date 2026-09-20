@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import Settings
 from .db import AppDB
 from .deps import Slots, available_memory_mb
-from .routers import alignments, auth_routes, catalogue, collab, constraints, contours, data, designs, export, jobs, projects, sections, tin
+from .routers import alignments, auth_routes, catalogue, collab, constraints, contours, data, design_road, designs, export, jobs, projects, sections, tin
 from .services import ServiceError
 
 
@@ -36,7 +36,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     api_prefix = "/api"
     for r in (auth_routes.router, projects.router, data.router, constraints.router, tin.router, contours.router,
-              alignments.router, sections.router, export.router, jobs.router, collab.router, designs.router, catalogue.router):
+              alignments.router, sections.router, export.router, jobs.router, collab.router, designs.router, catalogue.router,
+              design_road.router):
         app.include_router(r, prefix=api_prefix)
 
     @app.get("/api/health", tags=["meta"])

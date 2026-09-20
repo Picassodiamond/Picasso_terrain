@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Standards and checks - Picasso LandMesh help</title>
+<link rel="stylesheet" href="help.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='2,28 12,6 20,18 26,10 30,28' fill='%23f59e0b'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html"><span>▲</span> Picasso LandMesh · Help</a>
+  <nav>
+    <a href="index.html">Getting started</a>
+    <a href="terrain.html">Terrain module</a>
+    <a href="road.html">Road design</a>
+    <a class="active" href="standards.html">Standards &amp; checks</a>
+    <a href="accounts.html">Accounts &amp; sharing</a>
+    <a href="faq.html">Troubleshooting</a>
+  </nav>
+  <a class="app" href="/">Open the app</a>
+</header>
+
+<div class="wrap">
+<aside class="toc">
+  <h4>On this page</h4>
+  <a href="#checks">Reading a check</a>
+  <a href="#context">Design parameters select the rows</a>
+  <a href="#status">Verified, placeholder, deviation</a>
+  <a href="#params">What is checked</a>
+  <a href="#admin">Maintaining a standard (administrators)</a>
+</aside>
+
+<main>
+<h1>Standards and checks</h1>
+<p class="lead">Design values are never hidden in the code. They live in standard files, every check tells you which value it used and where it comes from, and a design can record justified deviations. The Nepal Road Standard 2070 (second revision, Department of Roads) ships as the default standard, transcribed table by table from the printed document with its clause and table references.</p>
+<div class="tip"><b>What NRS 2070 fixes.</b> Road classes I to IV by traffic (Table 24-1), terrain by cross slope (Table 6-1), design speeds (Table 7-1), sight distances (Tables 8-1, 8-2), minimum radii with and without superelevation and for comfort (Table 9-1), transition lengths by radius (Table 9-2) and the 1000 m / 0.25 m shift rules (cl. 9.2), hair-pin bends (Table 9-3), extra widening (Table 9-4), set-back distance (cl. 9.5), maximum gradients by speed with altitude and curve compensation (Table 10-1, cl. 10.1.2), critical lengths of grade (Table 10-2), K values (Tables 10-3, 10-4), lane and shoulder widths (Tables 11-1, 11-2, 24-1), camber (Table 11-3), superelevation limits and runoff (cl. 11.6), embankment slopes by height and cut slopes by material (Tables 11-4, 11-5), right of way (Table 11-6), drainage rules (cl. 13.8) and the clothoid aesthetics of cl. 19.</div>
+
+<h2 id="checks">Reading a check</h2>
+<figure class="half"><img src="img/road-checks.jpg" alt="Check rows"><figcaption>Check rows on the Alignment stage.</figcaption></figure>
+<table>
+  <tr><th>Part</th><th>Meaning</th></tr>
+  <tr><td>Coloured dot</td><td><span class="badge ok">green</span> passes, <span class="badge warn">amber</span> warning, <span class="badge err">red</span> fails, blue could not be evaluated (no value in the standard for this case).</td></tr>
+  <tr><td>Where</td><td>The element concerned: IP 2, PVI 3, a chainage.</td></tr>
+  <tr><td>Message</td><td>The actual value, the limit it was compared with and the rule (for example <i>radius 250 m ok, &gt;= 130 m, NRS 2070 Table 5.x minimum radius</i>).</td></tr>
+  <tr><td><span class="badge warn">verify</span></td><td>The limit comes from a <b>placeholder</b> value that has not yet been verified against the printed standard.</td></tr>
+  <tr><td><span class="badge">deviation</span></td><td>The limit was replaced by a project-specific value with a written justification.</td></tr>
+</table>
+<p>Hover a check to see the source and the status of its parameter. The Excel workbook lists every check with the same information on its <i>Checks</i> sheet.</p>
+
+<h2 id="context">Design parameters select the rows</h2>
+<p>Standards give different values for different roads. The <b>Design parameters</b> card of the Alignment stage sets the functional <b>road class</b> (I expressway, II arterial, III collector, IV local, by 20-year traffic in PCU/day), the <b>terrain</b> (plain, rolling, mountainous or steep by the cross slope of the country), the <b>design speed</b>, the pavement <b>surface</b>, the <b>cut material</b> of Table 11-5 and the administrative <b>road type</b> (National Highway, Feeder Road, District Road) that fixes the right of way. Every check and the default typical section use the matching table rows. Change a parameter and the checks re-evaluate on the next save.</p>
+<div class="note"><b>Design speed.</b> Leave the speed on <i>standard</i> to use Table 7-1 for the class and terrain; the standard allows 75 % of that value in very difficult terrain, which you enter explicitly. Side friction, sight distance, gradient and K limits are looked up for the chosen speed.</div>
+<div class="note"><b>Snow-bound and altitude.</b> Tick <i>snow-bound area</i> to cap the superelevation at 7 % (cl. 11.6 b). <i>Ease gradients for altitude</i> lowers the maximum gradient by 0.5 % for every 500 m of the design's mean level above sea level (cl. 10.1.2 a); switch it off for projects whose levels are not above mean sea level.</div>
+<div class="note"><b>Older designs.</b> Designs created with the earlier class names are mapped automatically: National Highway to class II, Feeder Road to class III, District and Village Roads to class IV; the old material names map to the Table 11-5 categories.</div>
+
+<h2 id="status">Verified, placeholder, deviation</h2>
+<table>
+  <tr><th>Status</th><th>Meaning</th><th>What you should do</th></tr>
+  <tr><td><b>verified</b></td><td>The value was checked against the printed document and carries its clause or table reference.</td><td>Nothing; quote the source from the check.</td></tr>
+  <tr><td><b>placeholder</b></td><td>A value entered while a standard is being set up and not yet checked against the document.</td><td>Have the value verified by your engineer and ask the administrator to update the file. Sheets carry a note while placeholders remain.</td></tr>
+  <tr><td><b>default</b></td><td>An application default where the standard gives no number: cut-slope berm height and width, the minimum vertical curve length (NRS works with K values), the fill height and cut depth that trigger wall suggestions, and the usual height and span ranges of each wall, drain and culvert type.</td><td>Adjust in the templates or the structure record, or record a deviation; the checks name them as defaults.</td></tr>
+  <tr><td><b>deviation</b></td><td>The design overrides the standard for this parameter, with a justification (for example a hairpin accepted by the Department of Roads).</td><td>Keep the justification with the design; it is shown on the check and in the Excel workbook.</td></tr>
+  <tr><td><b>missing</b></td><td>The standard has no value for this parameter and context.</td><td>The check is reported as not evaluated; add the value to the standard file.</td></tr>
+</table>
+
+<h2 id="params">What is checked</h2>
+<table>
+  <tr><th>Stage</th><th>Checks</th><th>Parameters used</th></tr>
+  <tr><td>Alignment</td><td>Absolute minimum radius with e<sub>max</sub> (error), recommended radius without superelevation (warning, or error when superelevation is disabled), comfort radius (information); transition required below 1000 m unless the shift would be under 0.25 m; transition length by radius; clothoid parameter A within 0.4 R to 1.4 R and transition at least a quarter of the arc; hair-pin bends (radius, transition, speed, 60 m spacing); superelevation demand within e<sub>max</sub>; straights over 5 km; overlapping or zero-length curves</td><td>Tables 9-1, 9-2, 9-3, 24-4, cl. 9.2, 9.3, 11.6, 19</td></tr>
+  <tr><td>Profile</td><td>Maximum gradient by design speed, eased for altitude; critical length of grade above 4 %; grade compensation on curves (30 + R) / R %, at most 75 / R %; gradient through hair-pin bends; minimum gradient for drainage; minimum K for summit and valley curves; the default minimum curve length</td><td>Tables 10-1, 10-2, 10-3, 10-4, cl. 10.1.1 e, 10.1.2</td></tr>
+  <tr><td>Templates and corridor</td><td>Default lanes, lane width, shoulder width and crossfall, camber, cut slope by material, fill slope by height; sections whose template fill slope is steeper than Table 11-4 allows for their fill height, and fills above 12 m, are flagged after each corridor build</td><td>Tables 11-1 to 11-5, 24-1, cl. 11.2, 11.5</td></tr>
+  <tr><td>Curve table</td><td>Extra widening by radius and number of lanes; set-back distance for stopping sight distance</td><td>Table 9-4, cl. 9.5, Table 8-1</td></tr>
+  <tr><td>Structures and drainage</td><td>Culvert span against the 6 m bridge limit; drain lining for the gradient and the soil; minimum drain gradient; catch-drain offset behind the cut; cross drains wherever side-drain outlets would be more than 500 m apart; wall types against the height they normally carry (an application default)</td><td>Table 13-3, cl. 13.8 c, d, f, i, cl. 17.1 a, 17.2</td></tr>
+</table>
+<p>The <b>Standard</b> sheet of the Excel workbook lists the value, unit, source and status of every parameter as resolved for the design.</p>
+
+<h2 id="admin">Maintaining a standard (administrators)</h2>
+<p>Standards are JSON files in the <code>plm/design/standards</code> folder of the installation; <code>nrs-2070.json</code> holds the Nepal Road Standard 2070. Each parameter table has rows keyed by road class, terrain, speed, radius, gradient, fill height, surface or material (a <code>*</code> row applies to all), and every value carries its <code>unit</code>, <code>source</code> (clause or table) and <code>status</code>. Numeric keys are matched to the nearest not-larger row, to the nearest not-smaller row when the table says <code>"lookup": "ceil"</code>, or interpolated when it says <code>"interpolate": true</code>. To change a value, edit the figure, cite the clause in <code>source</code> and keep the status; to add a standard, copy the file under a new id and choose it in the design settings. The option lists of the Design parameters card (classes, terrains, materials, road types) come from the file's <code>meta</code> block, so a new standard can use its own vocabulary.</p>
+<div class="warn"><b>Responsibility.</b> The software applies the values it is given. The engineer signing the design remains responsible for using the correct edition of the standard and for every deviation.</div>
+
+<footer>Picasso LandMesh help · updated 2026-09-20</footer>
+</main>
+</div>
+</body>
+</html>

@@ -13,6 +13,7 @@ export async function renderProjects(root: HTMLElement, onOpen: (p: Project) => 
     el("span", { class: "muted" }, "terrain modelling · contours · alignments · sections"),
     el("span", { style: "flex:1" }),
     button("Library", () => { location.hash = "#/library"; }, "btn small"),
+    button("Help", () => window.open("/help/index.html", "_blank"), "btn small"),
     user?.role === "admin" && user.authenticated ? button("Admin", () => { location.hash = "#/admin"; }, "btn small") : null,
     user?.authenticated ? el("span", { class: "muted" }, `${user.full_name || user.username} (${user.role}) `) : guest ? el("span", { class: "badge warn" }, "guest sandbox") : null,
     user?.authenticated ? button("Sign out", async () => { await api.auth.logout(); location.reload(); }, "btn small") : null,

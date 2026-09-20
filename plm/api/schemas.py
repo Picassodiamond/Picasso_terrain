@@ -235,6 +235,7 @@ class IPIn(BaseModel):
     x: float
     y: float
     radius: float = Field(0.0, ge=0)
+    transition: float = Field(0.0, ge=0)
     label: str = ""
 
 

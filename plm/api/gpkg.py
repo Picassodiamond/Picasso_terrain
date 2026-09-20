@@ -25,6 +25,19 @@ SCHEMA_VERSION = 1
 CUSTOM_SRS_ID = 100001
 
 
+def _json_default(o):
+    """numpy scalars / arrays in JSON."""
+    import numpy as _np
+
+    if isinstance(o, (_np.integer,)):
+        return int(o)
+    if isinstance(o, (_np.floating,)):
+        return None if _np.isnan(o) else float(o)
+    if isinstance(o, _np.ndarray):
+        return o.tolist()
+    raise TypeError(f"not serialisable: {type(o)!r}")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -442,6 +455,13 @@ class ProjectStore:
         c.execute("""CREATE TABLE IF NOT EXISTS designs (
             id INTEGER PRIMARY KEY AUTOINCREMENT, module TEXT NOT NULL, name TEXT DEFAULT '', tin_run_id INTEGER,
             alignment_id INTEGER, settings TEXT DEFAULT '{}', status TEXT DEFAULT 'draft', created TEXT, updated TEXT)""")
+        # per-design documents (horizontal, vertical, templates, structures ...) and computed results (corridor runs)
+        c.execute("""CREATE TABLE IF NOT EXISTS design_data (
+            design_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated TEXT, PRIMARY KEY (design_id, key))""")
+        c.execute("""CREATE TABLE IF NOT EXISTS design_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, design_id INTEGER NOT NULL, kind TEXT NOT NULL, created TEXT,
+            params TEXT DEFAULT '{}', summary TEXT DEFAULT '{}', data BLOB)""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_design_results ON design_results(design_id, kind, id)")
 
     # ------------------------------------------------------------------ designs
     @staticmethod
@@ -489,7 +509,66 @@ class ProjectStore:
 
     def delete_design(self, design_id: int) -> bool:
         with self._connect() as c:
+            self._migrate(c)
+            c.execute("DELETE FROM design_data WHERE design_id=?", (design_id,))
+            c.execute("DELETE FROM design_results WHERE design_id=?", (design_id,))
             return c.execute("DELETE FROM designs WHERE id=?", (design_id,)).rowcount > 0
+
+    # ------------------------------------------------------------------ design documents / results
+    def design_get(self, design_id: int, key: str, default=None):
+        with self._connect() as c:
+            self._migrate(c)
+            r = c.execute("SELECT value FROM design_data WHERE design_id=? AND key=?", (design_id, key)).fetchone()
+        return json.loads(r[0]) if r else default
+
+    def design_set(self, design_id: int, key: str, value) -> None:
+        with self._connect() as c:
+            self._migrate(c)
+            c.execute("INSERT INTO design_data(design_id, key, value, updated) VALUES (?,?,?,?) "
+                      "ON CONFLICT(design_id, key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+                      (design_id, key, json.dumps(value), _now()))
+            c.execute("UPDATE designs SET updated=? WHERE id=?", (_now(), design_id))
+
+    def design_updated(self, design_id: int) -> dict[str, str]:
+        """key -> ISO timestamp of the last write of each design document."""
+        with self._connect() as c:
+            self._migrate(c)
+            return {r[0]: r[1] for r in c.execute("SELECT key, updated FROM design_data WHERE design_id=?", (design_id,)) if r[1]}
+
+    def design_all(self, design_id: int) -> dict:
+        with self._connect() as c:
+            self._migrate(c)
+            return {r[0]: json.loads(r[1]) for r in c.execute("SELECT key, value FROM design_data WHERE design_id=?", (design_id,))}
+
+    def design_result_save(self, design_id: int, kind: str, params: dict, summary: dict, data) -> int:
+        import zlib
+
+        blob = zlib.compress(json.dumps(data, default=_json_default).encode("utf-8"), 6)
+        with self._connect() as c:
+            self._migrate(c)
+            cur = c.execute("INSERT INTO design_results(design_id, kind, created, params, summary, data) VALUES (?,?,?,?,?,?)",
+                            (design_id, kind, _now(), json.dumps(params), json.dumps(summary, default=_json_default), blob))
+            # keep the last five results of a kind
+            old = c.execute("SELECT id FROM design_results WHERE design_id=? AND kind=? ORDER BY id DESC LIMIT -1 OFFSET 5", (design_id, kind)).fetchall()
+            for r in old:
+                c.execute("DELETE FROM design_results WHERE id=?", (r[0],))
+            return int(cur.lastrowid)
+
+    def design_results(self, design_id: int, kind: str | None = None) -> list[dict]:
+        q = "SELECT id, design_id, kind, created, params, summary FROM design_results WHERE design_id=?" + (" AND kind=?" if kind else "") + " ORDER BY id DESC"
+        with self._connect() as c:
+            self._migrate(c)
+            rows = c.execute(q, (design_id, kind) if kind else (design_id,)).fetchall()
+        return [dict(r) | {"params": json.loads(r["params"] or "{}"), "summary": json.loads(r["summary"] or "{}")} for r in rows]
+
+    def design_result_data(self, result_id: int):
+        import zlib
+
+        with self._connect() as c:
+            r = c.execute("SELECT data FROM design_results WHERE id=?", (result_id,)).fetchone()
+        if not r or r[0] is None:
+            return None
+        return json.loads(zlib.decompress(r[0]).decode("utf-8"))
 
     def design_counts(self) -> dict[str, int]:
         with self._connect() as c:

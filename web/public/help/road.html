@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Road design - Picasso LandMesh help</title>
+<link rel="stylesheet" href="help.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='2,28 12,6 20,18 26,10 30,28' fill='%23f59e0b'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html"><span>▲</span> Picasso LandMesh · Help</a>
+  <nav>
+    <a href="index.html">Getting started</a>
+    <a href="terrain.html">Terrain module</a>
+    <a class="active" href="road.html">Road design</a>
+    <a href="standards.html">Standards &amp; checks</a>
+    <a href="accounts.html">Accounts &amp; sharing</a>
+    <a href="faq.html">Troubleshooting</a>
+  </nav>
+  <a class="app" href="/">Open the app</a>
+</header>
+
+<div class="wrap">
+<aside class="toc">
+  <h4>On this page</h4>
+  <a href="#start">Starting a road design</a>
+  <a href="#layout">The road workspace</a>
+  <a href="#alignment">1 · Alignment</a>
+  <a href="#profile">2 · Profile</a>
+  <a href="#templates">3 · Templates</a>
+  <a href="#earthworks">4 · Earthworks</a>
+  <a href="#structures">5 · Structures and 6 · Drainage</a>
+  <a class="sub" href="#walls">Wall kinds and types</a>
+  <a class="sub" href="#drains">Drain kinds and types</a>
+  <a class="sub" href="#quantities">Quantities and checks</a>
+  <a href="#output">7 · Output: drawings and exports</a>
+  <a class="sub" href="#sheets">Drawing sheets and preview</a>
+  <a class="sub" href="#dxf">AutoCAD (DXF)</a>
+  <a class="sub" href="#excel">Excel workbook and CSV</a>
+  <a class="sub" href="#reading">Reading the drawings</a>
+  <a href="#keys">Mouse and keyboard</a>
+</aside>
+
+<main>
+<h1>Road design</h1>
+<p class="lead">A road design lives on a terrain snapshot of the project and walks through seven stages. Each stage saves its own data, every geometric value is checked against the design standard, and the last stage produces the drawing sheets, the AutoCAD files and the quantities.</p>
+
+<h2 id="start">Starting a road design</h2>
+<ul>
+  <li>In the terrain workspace open an alignment and press <b>Open in Road design ▸</b>. The design is seeded with that alignment on the latest TIN run.</li>
+  <li>Or use <b>＋ New design</b> in the module switcher and pick <i>Road design</i>. A design without a seed alignment starts with an empty IP table.</li>
+  <li>The design is <b>pinned to a terrain snapshot</b>. When a newer TIN run exists the Alignment stage shows <i>Newer terrain available</i> with a <b>Rebase</b> button; nothing changes until you press it.</li>
+</ul>
+
+<h2 id="layout">The road workspace</h2>
+<figure><img src="img/road-alignment.jpg" alt="Road design workspace"><figcaption>Stage panel (left), plan view (centre), longitudinal profile (below), cross-section at the current chainage (right).</figcaption></figure>
+<table>
+  <tr><th>Area</th><th>What you do there</th></tr>
+  <tr><td><b>Stage panel</b></td><td>The seven stages with their status (<span class="badge ok">done</span>, todo, <span class="badge warn">unsaved</span>). Click a stage to open its cards; tables in the cards edit the same data as the drag handles on the plan and profile.</td></tr>
+  <tr><td><b>Plan</b></td><td>Project coordinates, north up. Layer chips switch the terrain extent, contours, constraint lines, corridor daylight lines, structures and the alignment; <b>Fit</b> and <b>Fit alignment</b> frame the view. Move the mouse to read chainage and offset in the status bar; click to show the cross-section there. On the Alignment stage the IP squares can be dragged.</td></tr>
+  <tr><td><b>Longitudinal profile</b></td><td>Ground line from the terrain snapshot and the design grade with draggable PVIs. Choose the vertical exaggeration (V ×2 … ×20). Hovering shows the cursor on the plan.</td></tr>
+  <tr><td><b>Cross-section</b></td><td>Ground and design at the chainage shown at the top; step with <b>◀ ▶</b>, choose the step (every 20 m) and the half-width.</td></tr>
+</table>
+
+<h2 id="alignment">1 · Alignment</h2>
+<div class="two">
+  <figure><img src="img/road-side-alignment.jpg" alt="Alignment stage cards"><figcaption>Terrain snapshot, design parameters, IP table, curve table, superelevation development and checks.</figcaption></figure>
+  <figure><img src="img/road-checks.jpg" alt="Checks"><figcaption>Every check quotes the value it was compared against and its source in the standard.</figcaption></figure>
+</div>
+<ol>
+  <li><b>Design parameters</b>: road class, terrain type, design speed and surface. They select the rows of the design standard used by all checks and by the default typical section. Save them before you start.</li>
+  <li><b>Horizontal alignment</b>: the IP table holds X, Y, the curve radius <b>R</b> and the transition (spiral) length <b>Ls</b>; 0 means no curve or no transition. Drag the IP squares on the plan or type the values. The plan previews the geometry while you edit; <b>Save alignment</b> stores it, <b>Revert</b> drops the edits.</li>
+  <li>The <b>curve table</b> lists, per IP, the deflection, radius, transition, tangent length T, curve length Lc, external E, the chainages of TS/BC, SC, CS and ST/EC, and the superelevation rate. <b>Superelevation development</b> shows where the cross slope rotates.</li>
+  <li><b>Checks</b>: minimum radius, whether a transition is required and long enough, superelevation demand against e<sub>max</sub>, and geometry problems such as overlapping curves.</li>
+</ol>
+<div class="note"><b>Transitions.</b> Spirals are clothoids of length Ls on both sides of the circular arc. The alignment file exported from the terrain module carries Ls as a fifth column.</div>
+<h3 id="follow">When the alignment changes</h3>
+<p>Moving an IP changes the ground under the road, so the grade line and the cross-sections have to follow. The card <b>When the alignment changes</b> decides what happens each time you save the alignment:</p>
+<ul>
+  <li><b>Stretch the grade line</b> (default): every PVI keeps its relative position along the road and its cut or fill depth against the ground, so the design intent survives the move. Curve lengths shrink with a shorter road.</li>
+  <li><b>Re-fit the grade line to the ground</b>: the grade line is generated again from the new ground at the previous PVI spacing; manual PVI edits are lost.</li>
+  <li><b>Trim / extend</b>: PVIs stay where they are; the grade line is clipped or extended along its end grades to the new start and end chainage.</li>
+  <li><b>Keep</b>: nothing moves; the Profile stage flags the grade line as out of date.</li>
+</ul>
+<p>Tick <b>rebuild the corridor and cross-sections at once</b> to run the corridor with its last settings straight after the save, so the cross-section panel, quantities and daylight lines update in the same step. While you drag an IP, the longitudinal profile already shows the ground under the new centre line.</p>
+
+<h2 id="profile">2 · Profile</h2>
+<figure><img src="img/road-profile.jpg" alt="Profile stage"><figcaption>Profile stage: PVI table on the left, grade line with draggable PVIs in the profile below the plan.</figcaption></figure>
+<ol>
+  <li><b>Fit to ground</b> creates a first grade line that follows the terrain, with a PVI every <i>PVI spacing</i> metres and vertical curves of the standard's minimum length.</li>
+  <li>Drag PVIs in the profile or edit chainage, level and curve length <b>L</b> in the table. Grades between PVIs and the K value of every curve are written on the profile.</li>
+  <li><b>Save profile</b> stores it; dragging a PVI saves automatically. Checks: maximum and exceptional gradient with the length allowed at the exceptional gradient, minimum gradient for drainage, minimum K for crest and sag curves and minimum curve length.</li>
+</ol>
+<div class="warn"><b>Grade line out of date.</b> When the alignment was changed after the grade line was saved, or the grade line no longer covers the whole alignment, an amber banner appears at the top of the Profile stage with the reason and three one-click fixes: <b>Stretch to new length</b>, <b>Re-fit to ground</b> and <b>Trim / extend to range</b>. The stage badge reads <span class="badge warn">stale</span> until you act.</div>
+<figure><img src="img/road-profile-chart.jpg" alt="Profile chart"><figcaption>The profile chart: ground (green), design grade (dashed) with PVIs, grade labels and vertical curve data.</figcaption></figure>
+
+<h2 id="templates">3 · Templates</h2>
+<figure class="half"><img src="img/road-side-templates.jpg" alt="Templates stage"><figcaption>Typical sections: components, cut and fill sides, assignments by chainage, superelevation settings.</figcaption></figure>
+<ul>
+  <li>A <b>template</b> is the typical cross-section: components from the centre line outwards on each side (lane, shoulder, verge, kerb …) with width and cross slope, and whether the component rotates with the superelevation. <b>Mirror</b> copies one side to the other.</li>
+  <li><b>Cut side</b>: slope (h:v), bench height and width, and an optional side ditch (foreslope, depth, bottom width). <b>Fill side</b>: slope and benches. <b>Daylight search width</b> limits how far the slope looks for the ground; a section that does not catch the ground is flagged.</li>
+  <li><b>Assignments by chainage</b> apply a template between two chainages; the first template is the default elsewhere. <b>Add range</b> and edit the from / to values.</li>
+  <li><b>Superelevation</b>: enable or disable, e<sub>max</sub>, side friction, normal camber, the relative gradient of the runoff and the rotated width. Defaults come from the standard for the design parameters.</li>
+</ul>
+
+<h2 id="earthworks">4 · Earthworks</h2>
+<figure><img src="img/road-earthworks.jpg" alt="Earthworks stage"><figcaption>After <b>Build corridor</b>: daylight lines on the plan, design band in the cross-section, quantities and the mass-haul diagram in the stage panel.</figcaption></figure>
+<ol>
+  <li>Set the <b>section interval</b>, the <b>cut factor</b> (shrinkage of cut placed as fill) and the <b>fill factor</b> (compaction demand); tick <b>prismoidal</b> to compute volumes from mid-sections as well.</li>
+  <li><b>Build corridor</b> sweeps the templates along the alignment: at every station the ground line is read from the terrain snapshot, the design level from the profile, the cross slopes from the superelevation, and the slopes are daylighted with ditches and benches. Cut and fill areas are exact for the sampled ground.</li>
+  <li><b>Quantities</b> show the number of sections, cut, fill, net, the maximum surplus and deficit and the balance points. The <b>mass-haul diagram</b> is clickable: click to jump to that chainage. <b>Volumes CSV</b> downloads the table.</li>
+</ol>
+<div class="warn"><b>Corridor out of date.</b> Changing the alignment, profile or templates after a build makes the corridor stale: the Earthworks badge reads <span class="badge warn">stale</span> and a banner with <b>Rebuild now</b> appears at the top of the stage. Cross-sections, quantities, structure suggestions and drawings use the latest build. Tick <i>rebuild the corridor and cross-sections at once</i> under Alignment to have this happen automatically after every alignment or profile save.</div>
+
+<h2 id="structures">5 · Structures and 6 · Drainage</h2>
+<div class="two">
+  <figure><img src="img/road-structures.jpg" alt="Structures stage"><figcaption>Structures: suggested walls from the corridor, each with a type from the catalogue, an editable table and the quantities.</figcaption></figure>
+  <figure><img src="img/road-drainage.jpg" alt="Drainage stage"><figcaption>Drainage: culverts and cross drains, longitudinal drains with the lining the gradient requires.</figcaption></figure>
+</div>
+<p>Both stages edit the same list of structures; the Structures stage shows the walls and the Drainage stage the culverts and drains. Each row carries a <b>kind</b>, a <b>type</b> from the catalogue, the side, the chainage range and the parameters that type needs. <b>Suggest</b> proposes records from the latest corridor and the terrain, <b>Add</b> creates one by hand, <b>Save structures</b> stores them. Structures are drawn on the plan, on the cross-sections and exported to DXF and Excel.</p>
+
+<h3 id="walls">Wall kinds and types</h3>
+<p>Kinds: <b>retaining wall</b> on the fill side, <b>breast wall</b> on the cut side, <b>toe wall</b> at the foot of a fill and <b>catch wall</b> at the foot of a cut for falling debris.</p>
+<table>
+  <tr><th>Type</th><th>Usual height</th><th>Where it suits</th></tr>
+  <tr><td>Dry stone masonry</td><td>to 3 m</td><td>Cheap, flexible, free draining; low cut and fill slopes.</td></tr>
+  <tr><td>Stone masonry in cement mortar</td><td>to 6 m</td><td>The usual hill-road gravity wall. Needs weep holes and a granular back drain.</td></tr>
+  <tr><td>Gabion (stepped wire crates)</td><td>to 8 m</td><td>1 x 1 m crates stepped one box per course; tolerates settlement, drains freely, good on weak foundations.</td></tr>
+  <tr><td>Mass concrete gravity</td><td>to 6 m</td><td>Where stone is scarce or the wall is submerged.</td></tr>
+  <tr><td>RCC cantilever</td><td>3 to 8 m</td><td>Stem on a base slab: far less material above about 4 m, but needs formwork and steel.</td></tr>
+  <tr><td>RCC counterfort</td><td>7 to 12 m</td><td>High walls where a cantilever becomes uneconomic.</td></tr>
+  <tr><td>Concrete crib</td><td>to 6 m</td><td>Precast units filled with granular material; quick, tolerates movement.</td></tr>
+  <tr><td>Reinforced soil (geogrid)</td><td>3 to 12 m</td><td>Compacted fill reinforced with geogrid behind a gabion or block facing; economic for long high fills.</td></tr>
+</table>
+<p><b>Suggest</b> picks the lightest type whose usual height covers the wall, so a 2 m wall comes back as dry stone and a 7 m wall as gabion. Changing the type changes the section, the material and the quantities. A wall taller than its type normally carries is flagged in the checks.</p>
+
+<h3 id="drains">Drain kinds and types</h3>
+<p>Kinds: <b>side drain</b> along cuts, <b>catch water drain</b> behind the top of a cut, <b>toe drain</b> along low fills, <b>chute or cascade</b> down a slope, <b>subsurface drain</b>, plus the cross drainage: <b>culvert</b> and <b>cross drain</b>.</p>
+<table>
+  <tr><th>Type</th><th>Shape and lining</th><th>Gradient it suits</th></tr>
+  <tr><td>Earthen trapezoidal</td><td>Trapezoid, unlined</td><td>Below 1 % in sandy soil, below 2 % in clayey soil</td></tr>
+  <tr><td>Grass-turfed trapezoidal</td><td>Trapezoid, turf</td><td>Up to 3 %</td></tr>
+  <tr><td>Stone-pitched or masonry trapezoidal</td><td>Trapezoid, rip-rap or masonry</td><td>3 to 5 %</td></tr>
+  <tr><td>Masonry or RCC rectangular</td><td>Rectangle, masonry or concrete</td><td>3 to 5 %, where space at the toe is tight</td></tr>
+  <tr><td>Concrete V-shape, dished</td><td>V or saucer, concrete</td><td>Shoulder, median and accesses</td></tr>
+  <tr><td>Stepped masonry (cascade)</td><td>Steps, masonry</td><td>Above 5 %</td></tr>
+  <tr><td>Perforated pipe in filter</td><td>150 to 200 mm pipe in a filter trench</td><td>Subsurface drainage</td></tr>
+</table>
+<div class="note"><b>The lining follows the standard.</b> NRS 2070 Table 13-3 fixes the lining from the longitudinal gradient and the soil, so <b>Suggest</b> chooses the type from the grade of your profile at that chainage, and the checks flag any drain whose lining is lighter than the gradient requires. Pick the soil (sandy or clayey) above the Suggest button.</div>
+<p>Culvert types are hume pipe, RCC box, RCC slab on masonry abutments, masonry arch, causeway and vented causeway, with a span and a number of cells. A total span over 6 m is a bridge under NRS 2070 cl. 17.1 a and is reported as an error.</p>
+
+<h3 id="quantities">Quantities and checks</h3>
+<p>Every stored structure produces material quantities from its type and size: masonry, gabion, concrete and steel for walls, excavation and lining for drains, pipe length for culverts. The stage shows the totals and the Excel export has a <b>Structure quantities</b> sheet with one row per structure and a total line. A structure on <i>both</i> sides counts twice.</p>
+<p>The checks card lists what the standard says about the records: culvert span against the bridge limit, drain lining and gradient, the 5 m catch-drain offset, the 500 m outlet spacing and each wall against the height its type normally carries.</p>
+<div class="tip"><b>Stream crossings</b> are found from feature lines whose name or layer contains <i>stream, khola, river, nala, nadi, drain, culvert</i> or <i>creek</i>. Name your streams in the Data tab of the terrain workspace.</div>
+
+<h2 id="output">7 · Output: drawings and exports</h2>
+<figure><img src="img/road-output.jpg" alt="Output stage"><figcaption>Output stage: sheet settings, the list of sheets, preview and export buttons, data exports and the design status.</figcaption></figure>
+
+<h3 id="sheets">Drawing sheets and preview</h3>
+<ol>
+  <li><b>Sheet settings</b>: paper (A4 to A0, landscape), plan scale, profile horizontal and vertical scales, cross-section scale, chainage interval and the plan orientation (rotated along the road or north up). Open <b>Title block</b> to fill organisation, project, road, drawing number prefix, drawn / checked / approved, date and revision. <b>Save sheet settings</b> re-lays the sheets.</li>
+  <li>The sheet list shows how many <b>Plan</b>, <b>Longitudinal section</b> and <b>Cross-section</b> sheets the design needs at those settings. Cross-section sheets need a built corridor; the profile needs ground under the alignment or a grade line.</li>
+  <li>Click a sheet number or <b>Preview drawings</b> to open the viewer. The list on the left jumps between sheets, <b>‹ ›</b> or the arrow keys step, the wheel zooms, dragging pans, <b>Fit</b> resets. What you see is exactly what the DXF contains.</li>
+</ol>
+<div class="two">
+  <figure><img src="img/sheet-plan.jpg" alt="Plan sheet preview"><figcaption>Plan sheet: contours, centreline, IPs and tangents, chainages, daylight lines, curve data and the title block.</figcaption></figure>
+  <figure><img src="img/sheet-plan-zoom.jpg" alt="Zoomed plan sheet"><figcaption>Zoom with the mouse wheel to read the labels.</figcaption></figure>
+  <figure><img src="img/sheet-profile.jpg" alt="Longitudinal section sheet"><figcaption>Longitudinal section with data bands and vertical curve data.</figcaption></figure>
+  <figure><img src="img/sheet-sections.jpg" alt="Cross-section sheet"><figcaption>Cross-sections with cut / fill hatching and level bands.</figcaption></figure>
+</div>
+
+<h3 id="dxf">AutoCAD (DXF)</h3>
+<table>
+  <tr><th>Button</th><th>File</th></tr>
+  <tr><td><b>DXF: all sheets</b></td><td>Every sheet, drawn in millimetres. Model space holds the sheets side by side (one row per kind) and each sheet also has its own <b>paper-space layout</b> at 1:1, so you can plot straight from the Layout tabs.</td></tr>
+  <tr><td><b>DXF: plan / profile / sections</b></td><td>Only the sheets of that kind.</td></tr>
+  <tr><td><b>Model DXF (project coordinates)</b></td><td>The design in metres in the project coordinate system: centreline with true arcs on <code>H_ALIGN</code>, IPs and tangents, chainage ticks, curve key points, the 3-D design centreline, formation and daylight lines, one 3-D polyline per cross-section and the structures. Overlay it on the terrain DXF from the Export tab.</td></tr>
+</table>
+<p>Layers are named for their content (<code>CONTOUR</code>, <code>H_ALIGN</code>, <code>DESIGN</code>, <code>GROUND</code>, <code>CUT_HATCH</code> …) with colours and lineweights set on the layer, so a plot style of your own can override them.</p>
+
+<h3 id="excel">Excel workbook and CSV</h3>
+<p><b>Excel workbook (.xlsx)</b> writes one file with these sheets:</p>
+<table>
+  <tr><th>Sheet</th><th>Contents</th></tr>
+  <tr><td>Summary</td><td>Project, design, standard and its status, design parameters, lengths, totals, number of failing checks.</td></tr>
+  <tr><td>Horizontal, Superelevation</td><td>IP and curve table with all chainages and quantities; cross slopes along the road and per curve.</td></tr>
+  <tr><td>Vertical, Levels</td><td>PVI table with grades, K, BVC / EVC and high / low points; ground level, design level, depth, grade and cross slopes at every station.</td></tr>
+  <tr><td>Sections, Section points</td><td>Per section: template, areas, side kinds, hinge and catch offsets, heights, flags; every design and ground point of every section.</td></tr>
+  <tr><td>Volumes, Mass haul</td><td>Volumes between stations with <b>live formulas</b>: change the cut or fill factor cells at the top and the adjusted volumes, net and cumulative recalculate.</td></tr>
+  <tr><td>Structures, Checks, Standard</td><td>The structures table; every check with result, limit and source; the standard's parameters with their status.</td></tr>
+</table>
+<p>The CSV buttons give the IP / curve table, the PVI table and the volumes as plain text; <b>Design JSON</b> saves the whole design for archiving or re-import by the administrator.</p>
+<div class="warn"><b>Downloads need an account.</b> Guests can preview every sheet but cannot download DXF, Excel or CSV.</div>
+
+<h3 id="reading">Reading the drawings</h3>
+<ul>
+  <li><b>Drawing numbers</b>: <code>RD-P-01</code> plan sheets, <code>RD-L-01</code> longitudinal sections, <code>RD-X-01</code> cross-sections; the prefix comes from the title block settings. The title block shows the scale, the date and <i>sheet n of N</i>.</li>
+  <li><b>Match lines</b> mark where the road continues on the neighbouring sheet, with its number.</li>
+  <li><b>Datum changes</b>: on steep roads a longitudinal section sheet is divided by break lines; each part has its own datum written below it, as in hand-drawn sections. Choose a larger vertical scale (for example V 1:200) for fewer breaks.</li>
+  <li><b>Cross-sections</b> are drawn at the sheet scale; a section too large for the paper is drawn smaller and says so under its title. Bands give the offset, the design level and the ground level at the annotated points; <i>C</i> and <i>F</i> at the daylight points are the cut and fill heights.</li>
+  <li>The <b>notes</b> on every sheet state the design standard and warn when its values are still placeholders (see <a href="standards.html">Standards &amp; checks</a>).</li>
+</ul>
+
+<h2 id="keys">Mouse and keyboard</h2>
+<table>
+  <tr><th>Where</th><th>Action</th></tr>
+  <tr><td>Plan</td><td>Drag to pan, wheel to zoom, click to show the cross-section at that chainage, drag an IP square (Alignment stage) to move it.</td></tr>
+  <tr><td>Profile</td><td>Drag a PVI to move it (saves on release); hover to read chainage and levels.</td></tr>
+  <tr><td>Cross-section</td><td><b>◀ ▶</b> step through the stations; change the step and the half-width in the header.</td></tr>
+  <tr><td>Sheet viewer</td><td><kbd>←</kbd> <kbd>→</kbd> previous / next sheet, wheel zooms, drag pans, double-click fits, <kbd>Esc</kbd> closes.</td></tr>
+  <tr><td>Everywhere</td><td>Unsaved changes are flagged in the top bar and on the stage; the browser warns before you leave with unsaved edits.</td></tr>
+</table>
+
+<footer>Picasso LandMesh help · updated 2026-09-20</footer>
+</main>
+</div>
+</body>
+</html>

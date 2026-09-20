@@ -30,6 +30,7 @@ plm/
   tests/         pytest (engine + API)   ·   web/e2e/smoke.mjs  Playwright browser smoke test
   examples/      demo data generators; examples/realworld/ real SRTM terrain sample (Nagarkot, UTM 45N)
   plm/api/modules.py  module registry (terrain core + design modules)
+  plm/design/    road design engine: standards, horizontal checks, vertical, superelevation, templates, corridor, earthworks, structures
   web/src/modules/    design workspaces (road: plan / profile / section shell)
   plm/api/catalogue.py, archive.py   asset library, archive bundles, backups
   passenger_wsgi.py   cPanel / Passenger entry point
@@ -117,13 +118,60 @@ the top bar (`#/p/{project}` terrain, `#/p/{project}/road/{design}` design). Mod
 | Module | Status | What it is |
 |---|---|---|
 | Terrain | core | survey points, constraints, TIN, contours, alignments, sections |
-| Road design | shell | stage panel (Alignment, Profile, Templates, Earthworks, Structures, Drainage, Output), 2-D plan view in project coordinates, ground profile and cross-sections from the snapshot, seed alignment and design parameters; the road engine plugs into the stages |
+| Road design | engine + workspace | horizontal alignment with circular curves and clothoid transitions (IPs dragged on the plan, curve table, superelevation development), vertical alignment with parabolic curves (fit to ground, PVIs dragged in the profile, grades and K values), typical-section templates by chainage (lanes, shoulders, verges, kerbs; cut slope with benches and side ditch, fill slope), corridor sweep with daylighting, cut / fill areas, end-area or prismoidal volumes and mass haul, retaining / breast / toe / catch walls and culverts and drains chosen from a type catalogue with quantities; Output stage with drawing sheets on a standard template (plan, longitudinal section, cross-sections) previewed in the browser and exported to AutoCAD DXF, a model-space design DXF, an Excel workbook and CSV tables; every check quotes the standard's value and clause (`plm/design/standards/*.json`, Nepal Road Standard 2070 transcribed with clause references from `Resource/Nepal Road Standard (NRS) 2070.pdf`, status *verified*; application defaults are marked *default*) and designs may record deviations |
 | Canal design | planned | |
 | Building site | planned | |
 
 API: `GET /api/modules`, `GET/POST /projects/{id}/designs`, `GET/PATCH/DELETE /projects/{id}/designs/{did}`
 (PATCH `tin_run_id` = rebase onto a newer terrain). "Open in Road design" on an alignment creates a design
 seeded with it.
+
+## Road design engine (`plm/design`)
+
+```
+horizontal (IPs, R, Ls) -> checks -> vertical (PVIs, L) -> templates + superelevation -> corridor -> areas / volumes / mass haul -> structures
+```
+
+* `standards.py` - parameter tables as data with source clause and status (verified / default / placeholder / deviation); numeric keys
+  are matched floor / ceil or interpolated per table. `nrs-2070.json` holds the Nepal Road Standard 2070 (classes I-IV, terrain by cross
+  slope, Tables 7-1 to 13-3 and the cl. 19 aesthetics rules) transcribed from the PDF in `Resource/`; legacy class and material names
+  are mapped through the file's `meta.legacy_*` tables.
+* `plm.engine.alignment` now supports symmetric clothoid transitions (`IP.transition`); `*_aln.csv` accepts a fifth column
+  (Road layout). `horizontal.py` checks radius, transition need / length and superelevation demand.
+* `vertical.py` - PVIs with symmetric parabolic curves, K values, high / low points, gradient and K checks, fit-to-ground.
+* `superelevation.py` - e from e + f = V^2 / 127 R, runoff over the spiral or from the relative gradient, rotation about the centreline.
+* `template.py` / `corridor.py` - components outward from the centreline to the hinge, then cut (ditch, slope, benches) or fill daylighting
+  against the TIN ground line; exact piecewise-linear cut and fill areas; `earthworks.py` volumes and mass haul; `structures.py` wall and
+  culvert suggestions (fill height, no-catch, stream crossings, sag points). Walls (retaining, breast, toe, catch) come in eight types
+  from dry stone to RCC counterfort and reinforced soil, drains in ten types from earthen trapezoid to stepped cascade and perforated
+  pipe, culverts in six; each type carries its section geometry (drawn on the cross-sections), the height or span it suits and the
+  materials it consumes, so `bill_of_quantities()` gives masonry, gabion, concrete, steel, excavation and lining per structure.
+  Drain linings follow NRS 2070 Table 13-3 from the grade at that chainage; `check_structures()` reports span, lining, gradient,
+  offset, outlet spacing and wall height against the standard.
+* API under `/projects/{id}/designs/{did}/road`: `horizontal` (GET/PUT, `preview`), `ground`, `vertical` (GET/PUT, `auto`), `templates`,
+  `corridor` (POST build, GET latest, `section`, `volumes.csv`), `structures` (GET/PUT, `suggest`), `standards`.
+* `drawing/` - drawing sheets and data exports. One primitive model in sheet millimetres (`model.py`) is rendered to DXF
+  (`dxf.py`: sheets side by side in model space plus one paper-space layout per sheet at 1:1, so AutoCAD plots them directly)
+  and to SVG (`svg.py`, the browser preview), so the preview is exactly what AutoCAD opens. `frame.py` holds the sheet template
+  (`plm/design/sheets/default.json`: paper, margins, notes, data table and title-block rows bound to fields) and the per-design
+  settings; `plan.py` splits the alignment into sheets that fit the paper at the plan scale (rotated along the road or north up)
+  with contours, IPs and tangents, chainage ticks, curve key points, corridor daylight lines, structures, match lines and the curve
+  table; `profile.py` draws the longitudinal section with data bands (grade, design and ground levels, cut / fill, chainage,
+  horizontal alignment diagram, superelevation) and splits sheets by the level range; `sections.py` packs the cross-sections in a
+  grid with cut / fill hatching and offset / level bands; `excel.py` writes the workbook (horizontal, superelevation, vertical,
+  levels, sections, volumes with live cut / fill factor formulas, mass haul, section points, structures, checks, standard).
+  A model-space DXF in project coordinates (centreline with arcs as bulges, 3-D design lines, sections, structures) is separate.
+* Output routes: `sheets` (GET index + settings, PUT `sheets/settings`), `sheets/{plan|profile|sections}/{n}.svg` (preview, free for
+  guests), `export/sheets.dxf?kinds=`, `export/model.dxf`, `export/design.xlsx` (signed-in users).
+
+## User help pages
+
+End-user documentation lives in `web/public/help/` (static HTML, no build step) and is served with the app at
+`/help/index.html`; the **Help** buttons in the projects page, the terrain workspace, the road workspace and the
+Output stage open the matching page. Pages: getting started, terrain module, road design, standards and checks,
+accounts and sharing, troubleshooting. Screenshots are generated by `node e2e\help_shots.mjs` against a running
+server (a georeferenced terrain project with contours, alignment and sections, and a project with a built road
+corridor) into `web/public/help/img/`; re-run it after UI changes so the pictures match the software.
 
 ## Large datasets
 
@@ -155,6 +203,10 @@ node e2e\basemap_check.mjs http://127.0.0.1:8000 <projectId>   # base map tiles 
 node e2e\constraints_check.mjs http://127.0.0.1:8000 <projectId>   # detect -> accept -> build -> rejected layer (Playwright)
 node e2e\bigdata_check.mjs http://127.0.0.1:8000 <projectId>   # tiled mesh + point cloud + nearest-point click (Playwright)
 node e2e\modules_check.mjs http://127.0.0.1:8000 <projectId>   # terrain -> Open in Road design -> plan / profile / section -> back (Playwright)
+node e2e\road_check.mjs http://127.0.0.1:8000 <projectId>   # road design: IPs -> fit profile -> templates -> corridor -> structures (Playwright)
+node e2e\svg_shot.mjs <folder> [zoom] [x y w h]   # render exported sheet SVGs to PNG (visual check of drawings)
+node e2e\help_shots.mjs http://127.0.0.1:8000 <terrainProjectId> <roadProjectId>   # refresh the screenshots of the user help pages
+node e2e\help_check.mjs http://127.0.0.1:8000   # help pages: served, images load, anchors exist (Playwright)
 node e2e\auth_check.mjs http://127.0.0.1:8011   # accounts: guest sandbox -> sign in claims it -> library -> admin (server with PLM_AUTH_ENABLED=1)
 ```
 

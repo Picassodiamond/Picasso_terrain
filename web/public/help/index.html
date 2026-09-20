@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started - Picasso LandMesh help</title>
+<link rel="stylesheet" href="help.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='2,28 12,6 20,18 26,10 30,28' fill='%23f59e0b'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html"><span>▲</span> Picasso LandMesh · Help</a>
+  <nav>
+    <a class="active" href="index.html">Getting started</a>
+    <a href="terrain.html">Terrain module</a>
+    <a href="road.html">Road design</a>
+    <a href="standards.html">Standards &amp; checks</a>
+    <a href="accounts.html">Accounts &amp; sharing</a>
+    <a href="faq.html">Troubleshooting</a>
+  </nav>
+  <a class="app" href="/">Open the app</a>
+</header>
+
+<div class="wrap">
+<aside class="toc">
+  <h4>On this page</h4>
+  <a href="#what">What Picasso LandMesh does</a>
+  <a href="#screen">Finding your way around</a>
+  <a href="#first">Your first project</a>
+  <a href="#account">Guest or account?</a>
+  <a href="#data">Preparing survey data</a>
+  <a href="#help">Getting help</a>
+</aside>
+
+<main>
+<h1>Getting started</h1>
+<p class="lead">Picasso LandMesh (PLM) turns survey points into a terrain model, contours, alignments and sections in the browser, and designs roads on that terrain: horizontal and vertical alignment, cross-sections, earthworks, structures, drawings and quantities.</p>
+
+<h2 id="what">What Picasso LandMesh does</h2>
+<div class="flow">
+  <span>Survey points</span><i>→</i><span>Constraint lines</span><i>→</i><span>Triangulated terrain (TIN)</span><i>→</i><span>Contours</span><i>→</i><span>Alignment</span><i>→</i><span>Profile &amp; sections</span><i>→</i><span>Road design</span><i>→</i><span>Drawings, DXF, Excel</span>
+</div>
+<div class="cards">
+  <div class="card"><h3>Terrain module</h3><p>Import points from CSV, DXF or GeoJSON, review the survey limit and gaps, build a constrained terrain model, generate contours, draw alignments, cut profiles and cross-sections, and export everything for AutoCAD or QGIS. <a href="terrain.html">Read more</a></p></div>
+  <div class="card"><h3>Road design module</h3><p>Open an alignment as a road design pinned to a terrain snapshot. Work through seven stages, from IPs and curves to the drawing sheets, with every value checked against the design standard. <a href="road.html">Read more</a></p></div>
+  <div class="card"><h3>Working together</h3><p>Projects have one owner who shares them with editors and viewers. Comments can be pinned on the map, every change is logged, and finished work is archived and catalogued in the Library. <a href="accounts.html">Read more</a></p></div>
+</div>
+
+<h2 id="screen">Finding your way around</h2>
+<figure><img src="img/projects.jpg" alt="Projects page"><figcaption>The projects page: create a project, open an existing one, or browse the Library. The badge on each card shows your role in that project.</figcaption></figure>
+<p>Every project opens in the <b>terrain workspace</b>. The map fills the screen; the side panel on the left holds the tabs <b>Data, TIN, Contours, Alignment, Sections, Export, Team</b> and <b>Settings</b>; the <b>Layers</b> panel at the top right switches map layers on and off; the status bar at the bottom shows the coordinates and the terrain level under the cursor.</p>
+<figure><img src="img/terrain-overview.jpg" alt="Terrain workspace"><figcaption>Terrain workspace: side panel, 3-D map with base map, layers panel and status bar.</figcaption></figure>
+<p>The <b>module switcher</b> in the top bar moves between the terrain workspace and the design workspaces of the same project. <b>＋ New design</b> creates a design from the current terrain model.</p>
+<figure><img src="img/module-switcher.jpg" alt="Module switcher"><figcaption>Module switcher with the New design menu open. Designs stay pinned to the terrain snapshot they were created on.</figcaption></figure>
+
+<h2 id="first">Your first project</h2>
+<ol class="steps">
+  <li><b>Create a project.</b> Give it a name and choose the coordinate system. Pick the MUTM or UTM zone of the survey when you know it: the terrain is then placed on OpenStreetMap or imagery. Choose <i>local grid</i> for legacy surveys in plain metres (you can place a local grid on the map later, under Settings).</li>
+  <li><b>Import survey points</b> in the <b>Data</b> tab: a CSV, text or Excel file with point number, easting, northing and level, a DXF with point blocks or points, or GeoJSON. Check the column mapping before you import.</li>
+  <li><b>Check the constraint lines.</b> Boundaries, holes and breaklines control the terrain model. Import them from DXF layers, draw them on the map, or let the software suggest the survey limit and gaps (<b>TIN</b> tab).</li>
+  <li><b>Build the TIN</b> in the <b>TIN</b> tab. The run card tells you how many triangles were kept, how many were rejected and why, and whether the model passed validation.</li>
+  <li><b>Generate contours</b> in the <b>Contours</b> tab: interval, index contours, smoothing, labels and colours. Several contour sets can exist side by side.</li>
+  <li><b>Draw an alignment</b> in the <b>Alignment</b> tab by clicking IPs on the map and typing curve radii, then <b>generate profile and cross-sections</b> in the <b>Sections</b> tab.</li>
+  <li><b>Export</b> a DXF for AutoCAD, a GeoPackage for QGIS or CSV tables from the <b>Export</b> tab, or press <b>Open in Road design ▸</b> on the alignment to start the road design.</li>
+</ol>
+<div class="tip"><b>Tip.</b> Long operations (TIN builds, contours, corridor sweeps) run as jobs. The panel shows the progress and, when the server is busy, your place in the queue. You can keep working in other tabs meanwhile.</div>
+
+<h2 id="account">Guest or account?</h2>
+<p>You can try the software without an account when the administrator has enabled the <b>guest sandbox</b>: a few small projects, a limited number of points and terrain builds, no downloads, deleted after some days. Accounts are created by the administrator (invite only). When you sign in, the sandbox projects you made as a guest become yours. Details are on the <a href="accounts.html">Accounts &amp; sharing</a> page.</p>
+
+<h2 id="data">Preparing survey data</h2>
+<table>
+  <tr><th>Format</th><th>What is read</th><th>Notes</th></tr>
+  <tr><td>CSV / TXT / XYZ / XLSX</td><td>Point number, easting, northing, level, optional remark (or just <code>x y z</code>)</td><td>Comma, semicolon, tab or space separated; header row optional; the column mapping can be corrected before import. Excel sheets are read the same way.</td></tr>
+  <tr><td>DXF</td><td>Points and point blocks from the chosen point layers; polylines from feature-line layers</td><td>Layer names default to <code>Points</code>, <code>Points-Blk</code> and <code>Features</code>. Boundary, void and contour layers become constraint lines of the matching kind.</td></tr>
+  <tr><td>GeoJSON</td><td>Point and line features</td><td>Coordinates must be in the project coordinate system.</td></tr>
+  <tr><td>Alignment CSV</td><td><code>*_aln.csv</code>: IP count and start chainage, then <code>N, X, Y, R</code> rows; a fifth column holds the transition length</td><td>The layout of the legacy  Road files; the same file is written by <b>Download CSV</b>.</td></tr>
+</table>
+<div class="note"><b>Coordinates.</b> Levels are metres above the project datum. Eastings and northings must all be in the project coordinate system; the software does not mix systems inside one project.</div>
+
+<h2 id="help">Getting help</h2>
+<ul>
+  <li>The <b>Help</b> button in the top bar of every workspace opens the page of this manual for that workspace; the Output stage of a road design opens the section on drawings and exports.</li>
+  <li>Hover over a field or a check to see its explanation; badges such as <span class="badge warn">verify</span> or <span class="badge">placeholder</span> are explained on the <a href="standards.html">Standards &amp; checks</a> page.</li>
+  <li>Common messages and what to do about them are collected under <a href="faq.html">Troubleshooting</a>.</li>
+</ul>
+
+<footer>Picasso LandMesh help · updated 2026-09-20 · Screenshots are taken from the demonstration projects shipped with the software.</footer>
+</main>
+</div>
+</body>
+</html>
