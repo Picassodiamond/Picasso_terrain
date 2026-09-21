@@ -39,6 +39,7 @@ cd web && npm run build                 # tsc --noEmit + vite build
 node e2e/road_check.mjs http://127.0.0.1:8000 <projectId>
 node e2e/help_check.mjs http://127.0.0.1:8000
 node e2e/visitor_check.mjs http://127.0.0.1:8000
+node e2e/keys_check.mjs http://127.0.0.1:8000 <terrainProjectId> <roadProjectId>
 ```
 
 Report failures with their output. Do not describe a result you have not seen.

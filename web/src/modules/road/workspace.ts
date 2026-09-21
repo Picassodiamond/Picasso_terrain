@@ -8,8 +8,9 @@
 import { api, ApiError, type Design, type ModuleInfo, type Project, type ProfilePoint, type Section, type TinRun } from "../../api";
 import { renderProfile } from "../../charts/profile";
 import { renderSection } from "../../charts/section";
+import { helpBinding, registerShortcuts, showShortcutHelp } from "../../ui/keys";
 import { store, toast } from "../../state";
-import { button, el, fmt, fmtChainage, select } from "../../ui/dom";
+import { button, el, fmt, fmtChainage, parseChainage, select } from "../../ui/dom";
 import { renderModuleSwitcher } from "../../ui/moduleSwitcher";
 import type { ModuleContext, ModuleInstance } from "../registry";
 import { designHash, terrainHash } from "../registry";
@@ -59,6 +60,7 @@ export class RoadWorkspace implements ModuleInstance {
   private toolbar!: HTMLElement;
   private activeStage = "alignment";
   private sectionInterval = 20;
+  private unregisterKeys: (() => void) | null = null;
   private halfWidth = 15;
   private centre: Centreline | null = null;
   private cursor: { x: number; y: number; dir: number } | null = null;
@@ -79,6 +81,8 @@ export class RoadWorkspace implements ModuleInstance {
 
   destroy(): void {
     this.destroyed = true;
+    this.unregisterKeys?.();
+    this.unregisterKeys = null;
     this.plan?.destroy();
     this.root.innerHTML = "";
   }
@@ -96,6 +100,7 @@ export class RoadWorkspace implements ModuleInstance {
       el("span", { class: "spacer" }),
       el("span", { class: "muted" }, this.project.crs_info?.is_local ? "local grid" : this.project.crs_info?.name || this.project.crs),
       user?.authenticated ? el("span", { class: "muted" }, user.username) : null,
+      button("⌨", () => showShortcutHelp(), "btn small"),
       button("Help", () => window.open("/help/road.html", "_blank"), "btn small"),
     );
     this.stageHost = el("aside", { class: "road-side" });
@@ -119,6 +124,7 @@ export class RoadWorkspace implements ModuleInstance {
     this.plan.onClick = (x, y) => { const s = this.stationAt(x, y); if (s) void this.showSection(s.chainage); };
     this.plan.onDrag = (id, x, y, phase) => this.onHandleDrag(id, x, y, phase);
     window.addEventListener("beforeunload", this.beforeUnload);
+    this.unregisterKeys = registerShortcuts("Road design", this.shortcuts());
 
     const [runs, designs, modules] = await Promise.all([api.tin.list(this.pid), api.designs.list(this.pid), api.modules.list().catch(() => [] as ModuleInfo[])]);
     if (this.destroyed) return;
@@ -657,6 +663,9 @@ export class RoadWorkspace implements ModuleInstance {
 
   async showSection(chainage: number): Promise<void> {
     const c = this.centre;
+    // clamp first: the head below prints this.station, and printing it before the update showed
+    // the previous station on every step
+    if (c) this.station = Math.min(Math.max(chainage, c.start), c.end);
     this.sectionHead.replaceChildren(
       el("b", {}, "Cross-section"),
       button("◀", () => void this.showSection(this.station - this.sectionInterval), "btn small"),
@@ -667,7 +676,6 @@ export class RoadWorkspace implements ModuleInstance {
       (() => { const w = select([10, 15, 20, 30, 50].map((v) => ({ value: String(v), label: `±${v} m` })), String(this.halfWidth)); w.addEventListener("change", () => { this.halfWidth = Number(w.value); void this.showSection(this.station); }); return w; })(),
     );
     if (!c || !this.run) { this.sectionEl.innerHTML = '<p class="muted" style="padding:20px">Needs a TIN run and an alignment.</p>'; return; }
-    this.station = Math.min(Math.max(chainage, c.start), c.end);
     const s = pointAtChainage(c, this.station);
     if (!s) return;
     this.cursor = s;
@@ -698,6 +706,81 @@ export class RoadWorkspace implements ModuleInstance {
     } catch (e) {
       this.sectionEl.innerHTML = `<p class="error" style="padding:20px">${e instanceof ApiError ? e.detail : String(e)}</p>`;
     }
+  }
+
+  // ================================================================== keyboard
+  /** What the keyboard does here. The help card (?) is built from these labels. */
+  private shortcuts() {
+    const V = [2, 5, 10, 20];
+    const W = [10, 15, 20, 30, 50];
+    const stageAt = (i: number) => {
+      const st = this.module?.stages || [];
+      if (i < st.length) { this.activeStage = st[i].id; this.renderStage(); this.buildPlan(); }
+    };
+    return [
+      helpBinding(),
+      { keys: ["arrowleft"], show: "←", label: "Previous station", group: "Cross-section", run: () => this.stepStation(-1) },
+      { keys: ["arrowright"], show: "→", label: "Next station", group: "Cross-section", run: () => this.stepStation(1) },
+      { keys: ["shift+arrowleft"], show: "Shift ←", label: "Back five stations", group: "Cross-section", run: () => this.stepStation(-5) },
+      { keys: ["shift+arrowright"], show: "Shift →", label: "Forward five stations", group: "Cross-section", run: () => this.stepStation(5) },
+      { keys: ["pageup"], show: "", label: "Back five stations", group: "Cross-section", run: () => this.stepStation(-5) },
+      { keys: ["pagedown"], show: "", label: "Forward five stations", group: "Cross-section", run: () => this.stepStation(5) },
+      { keys: ["home"], label: "Start of the alignment", group: "Cross-section", run: () => { if (this.centre) void this.showSection(this.centre.start); } },
+      { keys: ["end"], label: "End of the alignment", group: "Cross-section", run: () => { if (this.centre) void this.showSection(this.centre.end); } },
+      { keys: ["g"], label: "Go to chainage…", group: "Cross-section", run: () => this.promptChainage() },
+      { keys: ["["], label: "Narrower section", group: "Cross-section", run: () => this.stepHalfWidth(W, -1) },
+      { keys: ["]"], label: "Wider section", group: "Cross-section", run: () => this.stepHalfWidth(W, 1) },
+      { keys: ["+", "="], show: "+", label: "More vertical exaggeration (profile)", group: "Cross-section", run: () => this.stepVScale(V, 1) },
+      { keys: ["-"], show: "−", label: "Less vertical exaggeration (profile)", group: "Cross-section", run: () => this.stepVScale(V, -1) },
+      ...[1, 2, 3, 4, 5, 6, 7].map((n) => ({
+        keys: [String(n)], label: `Stage ${n}: ${(this.module?.stages || [])[n - 1]?.label ?? "-"}`, group: "Stages",
+        run: () => stageAt(n - 1),
+      })),
+      { keys: ["mod+s"], label: "Save everything unsaved on this design", group: "Design", whileTyping: true, run: () => void this.saveDirty() },
+      { keys: ["escape"], show: "Esc", label: "Back to the terrain workspace", group: "Design", run: () => { location.hash = terrainHash(this.pid); } },
+    ];
+  }
+
+  /** Move by whole section intervals, stopping at the ends of the alignment. */
+  private stepStation(steps: number): void {
+    const c = this.centre;
+    if (!c) return;
+    const next = Math.min(Math.max(this.station + steps * this.sectionInterval, c.start), c.end);
+    if (Math.abs(next - this.station) > 1e-9) void this.showSection(next);
+  }
+
+  private promptChainage(): void {
+    const c = this.centre;
+    if (!c) { toast("This design has no alignment yet", "error"); return; }
+    const answer = prompt(`Go to chainage (${fmtChainage(c.start)} – ${fmtChainage(c.end)})`, "");
+    if (answer === null || !answer.trim()) return;
+    const ch = parseChainage(answer.trim());
+    if (Number.isNaN(ch)) { toast(`Cannot read "${answer}" as a chainage`, "error"); return; }
+    void this.showSection(ch);
+  }
+
+  private stepVScale(scales: number[], delta: number): void {
+    const i = Math.min(Math.max(scales.indexOf(this.vScale) + delta, 0), scales.length - 1);
+    this.vScale = scales[i];
+    this.renderProfile();
+  }
+
+  private stepHalfWidth(widths: number[], delta: number): void {
+    const i = Math.min(Math.max(widths.indexOf(this.halfWidth) + delta, 0), widths.length - 1);
+    this.halfWidth = widths[i];
+    void this.showSection(this.station);
+  }
+
+  /** Ctrl+S: save whatever the design has outstanding, in dependency order. */
+  async saveDirty(): Promise<void> {
+    if (!this.dirty.size) { toast("Nothing to save", "info"); return; }
+    const order: [string, () => Promise<void>][] = [
+      ["horizontal", () => this.saveHorizontal()],
+      ["vertical", () => this.saveVertical()],
+      ["templates", () => this.saveTemplates()],
+      ["structures", () => this.saveStructures()],
+    ];
+    for (const [key, save] of order) if (this.dirty.has(key)) await save();
   }
 
   // ================================================================== stages

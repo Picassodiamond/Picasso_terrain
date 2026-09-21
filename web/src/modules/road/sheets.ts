@@ -3,6 +3,7 @@
 import { api } from "../../api";
 import { store, toast } from "../../state";
 import { button, download, el } from "../../ui/dom";
+import { helpBinding, registerShortcuts, showShortcutHelp } from "../../ui/keys";
 
 export interface SheetInfo { kind: string; index: number; title: string; number: string; paper: number[]; start?: number; end?: number; scale?: string; sections?: number }
 
@@ -63,13 +64,28 @@ export function openSheetPreview(pid: string, did: number, sheets: SheetInfo[], 
     list.appendChild(el("div", { class: "sheet-item", "data-i": String(i), onClick: () => go(i) }, el("span", { class: "mono" }, s.number || `${s.index + 1}`), " ", el("span", { class: "muted" }, s.title.replace(/^(PLAN|LONGITUDINAL SECTION|CROSS SECTIONS)\s*/, ""))));
   });
 
-  const close = () => { overlay.remove(); window.removeEventListener("keydown", onKey); window.removeEventListener("resize", fit); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); else if (e.key === "ArrowRight") go(cur + 1); else if (e.key === "ArrowLeft") go(cur - 1); };
+  let unregisterKeys: (() => void) | null = null;
+  const close = () => { overlay.remove(); unregisterKeys?.(); window.removeEventListener("resize", fit); };
+  const centreZoom = (f: number) => zoomAt(f, viewport.clientWidth / 2, viewport.clientHeight / 2);
+  // modal: while the viewer is open the workspace underneath does not see these keys
+  const bindings = [
+    helpBinding(),
+    { keys: ["escape"], show: "Esc", label: "Close the drawing preview", group: "Drawing sheets", run: close },
+    { keys: ["arrowright"], show: "→", label: "Next sheet", group: "Drawing sheets", run: () => go(cur + 1) },
+    { keys: ["arrowleft"], show: "←", label: "Previous sheet", group: "Drawing sheets", run: () => go(cur - 1) },
+    { keys: ["home"], label: "First sheet", group: "Drawing sheets", run: () => go(0) },
+    { keys: ["end"], label: "Last sheet", group: "Drawing sheets", run: () => go(sheets.length - 1) },
+    { keys: ["+", "="], show: "+", label: "Zoom in", group: "Drawing sheets", run: () => centreZoom(1.3) },
+    { keys: ["-"], show: "−", label: "Zoom out", group: "Drawing sheets", run: () => centreZoom(1 / 1.3) },
+    { keys: ["0", "f"], label: "Fit the sheet to the window", group: "Drawing sheets", run: () => fit() },
+    { keys: ["d"], label: "Download this kind as DXF", group: "Drawing sheets", run: () => { if (!guest) download(api.road.sheetsDxfUrl(pid, did, sheets[cur].kind)); } },
+  ];
   const head = el("div", { class: "sheet-head" },
     button("‹", () => go(cur - 1), "btn small"), button("›", () => go(cur + 1), "btn small"), title, counter, el("span", { class: "spacer" }),
     button("−", () => zoomAt(1 / 1.3, viewport.clientWidth / 2, viewport.clientHeight / 2), "btn small"), button("Fit", fit, "btn small"),
     button("+", () => zoomAt(1.3, viewport.clientWidth / 2, viewport.clientHeight / 2), "btn small"),
     button("Open SVG", () => window.open(api.road.sheetSvgUrl(pid, did, sheets[cur].kind, sheets[cur].index + 1), "_blank"), "btn small"),
+    button("⌨", () => showShortcutHelp(), "btn small"),
     dxfBtn, allBtn, button("✕ Close", close, "btn small"));
   const overlay = el("div", { class: "overlay sheet-preview" }, el("div", { class: "sheet-dialog" }, head, el("div", { class: "sheet-body" }, list, viewport)));
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
@@ -80,7 +96,7 @@ export function openSheetPreview(pid: string, did: number, sheets: SheetInfo[], 
   viewport.addEventListener("pointerup", () => { drag = null; });
   viewport.addEventListener("wheel", (e) => { e.preventDefault(); const r = viewport.getBoundingClientRect(); zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX - r.left, e.clientY - r.top); }, { passive: false });
   viewport.addEventListener("dblclick", fit);
-  window.addEventListener("keydown", onKey);
+  unregisterKeys = registerShortcuts("Drawing sheet preview", bindings, { modal: true });
   window.addEventListener("resize", fit);
   document.body.appendChild(overlay);
   void load();

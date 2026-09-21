@@ -9,7 +9,8 @@ import { Interaction } from "../map/draw";
 import { MapLayers, type PickId } from "../map/layers";
 import { MapViewer, type BaseMap } from "../map/viewer";
 import { store, toast, type AppState } from "../state";
-import { button, el, fmt, fmtChainage, select } from "./dom";
+import { button, el, fmt, fmtChainage, parseChainage, select } from "./dom";
+import { helpBinding, registerShortcuts, showShortcutHelp } from "./keys";
 import { renderAlignmentPanel } from "./panels/alignment";
 import { renderContoursPanel } from "./panels/contours";
 import { renderDataPanel } from "./panels/data";
@@ -52,6 +53,8 @@ export class Workspace {
   private sectionEl!: HTMLElement;
   private stationLabel!: HTMLElement;
   private vScale = 5;
+  private vSel!: HTMLSelectElement;
+  private unregisterKeys: (() => void) | null = null;
   private unsub: (() => void)[] = [];
   private pollTimer: number | null = null;
   private lastActivityId = 0;
@@ -182,6 +185,7 @@ export class Workspace {
     this.stationLabel = el("span", { class: "mono" });
     const vsel = select([1, 2, 5, 10, 20].map((v) => ({ value: String(v), label: `V ×${v}` })), String(this.vScale));
     vsel.addEventListener("change", () => { this.vScale = Number(vsel.value); this.renderCharts(); });
+    this.vSel = vsel;
     const splitter = el("div", { class: "splitter" });
     this.chartsEl = el("section", { class: "charts collapsed" },
       splitter,
@@ -190,6 +194,7 @@ export class Workspace {
         button("◀", () => this.stepSection(-1), "btn small"), this.stationLabel, button("▶", () => this.stepSection(1), "btn small"),
         vsel,
         el("span", { class: "spacer" }),
+        button("⌨", () => showShortcutHelp(), "btn small"),
         button("▾", () => this.toggleCharts(), "btn small"),
       ),
       el("div", { class: "chart-body" }, this.profileEl, this.sectionEl),
@@ -211,7 +216,7 @@ export class Workspace {
       onDragIp: (i, p, phase) => this.toolHandlers.onDrag?.(i, p, phase),
       onRightClick: () => { if (store.get("tool") !== "none") this.setTool("none"); },
     };
-    window.addEventListener("keydown", this.onKey);
+    this.unregisterKeys = registerShortcuts("Terrain workspace", this.shortcuts());
     window.addEventListener("resize", this.onResize);
 
     this.layerTree = new LayerTree(this, mapWrap);
@@ -256,12 +261,60 @@ export class Workspace {
     splitter.addEventListener("mousedown", (e) => { if (this.chartsEl.classList.contains("collapsed")) return; startY = e.clientY; startH = this.chartsEl.clientHeight; window.addEventListener("mousemove", move); window.addEventListener("mouseup", up); e.preventDefault(); });
   }
 
-  private onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") this.setTool("none");
-    if ((e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "TEXTAREA") return;
-    if (e.key === "ArrowRight") this.stepSection(1);
-    if (e.key === "ArrowLeft") this.stepSection(-1);
-  };
+  /** What the keyboard does on this screen. The help card (?) is built from these labels. */
+  private shortcuts() {
+    const V = [1, 2, 5, 10, 20];
+    return [
+      helpBinding(),
+      { keys: ["arrowleft"], show: "←", label: "Previous cross-section", group: "Cross-sections", run: () => this.stepSection(-1) },
+      { keys: ["arrowright"], show: "→", label: "Next cross-section", group: "Cross-sections", run: () => this.stepSection(1) },
+      { keys: ["shift+arrowleft"], show: "Shift ←", label: "Back ten sections", group: "Cross-sections", run: () => this.stepSection(-10) },
+      { keys: ["shift+arrowright"], show: "Shift →", label: "Forward ten sections", group: "Cross-sections", run: () => this.stepSection(10) },
+      { keys: ["pageup"], label: "Back ten sections", group: "Cross-sections", show: "", run: () => this.stepSection(-10) },
+      { keys: ["pagedown"], label: "Forward ten sections", group: "Cross-sections", show: "", run: () => this.stepSection(10) },
+      { keys: ["home"], label: "First section", group: "Cross-sections", run: () => this.goToSection(0) },
+      { keys: ["end"], label: "Last section", group: "Cross-sections", run: () => this.goToSection(Number.MAX_SAFE_INTEGER) },
+      { keys: ["g"], label: "Go to chainage…", group: "Cross-sections", run: () => this.promptChainage() },
+      { keys: ["c"], label: "Show or hide the chart pane", group: "Cross-sections", run: () => this.toggleCharts() },
+      { keys: ["+", "="], show: "+", label: "More vertical exaggeration", group: "Cross-sections", run: () => this.stepVScale(V, 1) },
+      { keys: ["-"], show: "−", label: "Less vertical exaggeration", group: "Cross-sections", run: () => this.stepVScale(V, -1) },
+      ...TABS.map((t, i) => ({ keys: [String(i + 1)], label: `${t.label} panel`, group: "Panels", run: () => this.showTab(t.key) })),
+      { keys: ["f"], label: "Zoom the map to the data", group: "Map", run: () => this.zoomToData() },
+      { keys: ["escape"], label: "Cancel the current drawing tool", group: "Map", whileTyping: true, run: () => this.setTool("none") },
+    ];
+  }
+
+  /** Jump to a section by index (clamped, not wrapped - Home and End should stop at the ends). */
+  goToSection(index: number): void {
+    const s = this.currentSectionSetData;
+    if (!s?.sections?.length) return;
+    const i = Math.min(Math.max(index, 0), s.sections.length - 1);
+    store.set("currentSectionIndex", i);
+    this.layers.highlightSection(i);
+    this.showCharts(true);
+  }
+
+  /** Nearest section to a chainage the user types, in metres or 1+250 form. */
+  private promptChainage(): void {
+    const s = this.currentSectionSetData;
+    if (!s?.sections?.length) { toast("Generate cross-sections first", "error"); return; }
+    const answer = prompt("Go to chainage (metres, or 1+250)", "");
+    if (answer === null || !answer.trim()) return;
+    const ch = parseChainage(answer.trim());
+    if (Number.isNaN(ch)) { toast(`Cannot read "${answer}" as a chainage`, "error"); return; }
+    let best = 0;
+    for (let i = 1; i < s.sections.length; i++) {
+      if (Math.abs(s.sections[i].chainage - ch) < Math.abs(s.sections[best].chainage - ch)) best = i;
+    }
+    this.goToSection(best);
+  }
+
+  private stepVScale(scales: number[], delta: number): void {
+    const i = Math.min(Math.max(scales.indexOf(this.vScale) + delta, 0), scales.length - 1);
+    this.vScale = scales[i];
+    if (this.vSel) this.vSel.value = String(this.vScale);
+    this.renderCharts();
+  }
   private onResize = () => this.renderCharts();
 
   showTab(tab: Tab): void {
@@ -572,9 +625,11 @@ export class Workspace {
   stepSection(delta: number): void {
     const s = this.currentSectionSetData;
     if (!s?.sections?.length) return;
-    const i = (store.get("currentSectionIndex") + delta + s.sections.length) % s.sections.length;
+    const n = s.sections.length;
+    const i = (((store.get("currentSectionIndex") + delta) % n) + n) % n;
     store.set("currentSectionIndex", i);
     this.layers.highlightSection(i);
+    if (this.chartsEl.classList.contains("collapsed")) this.showCharts(true);
   }
 
   renderCharts(): void {
@@ -669,7 +724,8 @@ export class Workspace {
     if (this.healthTimer) { window.clearInterval(this.healthTimer); this.healthTimer = null; }
     if (this.pollTimer) window.clearInterval(this.pollTimer);
     this.unsub.forEach((u) => u());
-    window.removeEventListener("keydown", this.onKey);
+    this.unregisterKeys?.();
+    this.unregisterKeys = null;
     window.removeEventListener("resize", this.onResize);
     this.interaction?.destroy();
     this.mv?.destroy();

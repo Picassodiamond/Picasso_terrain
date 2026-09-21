@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "picasso-landmesh"
-version = "0.1.0"
+version = "0.2.0"
 description = "Picasso LandMesh (PLM) - terrain modelling engine (TIN, contours, alignments, sections)"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,7 +18,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff"]
+dev = ["pytest>=8", "ruff", "httpx"]  # httpx is what starlette's TestClient runs on
+# everything the web server needs on top of the geometry engine. On cPanel (Passenger is WSGI-only)
+# a2wsgi wraps the ASGI application; uvicorn is only for running it locally.
+server = ["fastapi>=0.115", "python-multipart>=0.0.9", "a2wsgi>=1.10"]
+local = ["uvicorn[standard]>=0.30"]
 
 [project.scripts]
 plm = "plm.cli:main"

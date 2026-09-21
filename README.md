@@ -107,6 +107,22 @@ max_edge_length=..., min_angle_deg=...)` -> `TinResult` (TIN, rejected triangles
 * **Library** (`#/library`): every TIN run and design is catalogued with a WGS84 footprint, size, CRS, tags and lineage,
   searchable by text, tag and bounding box, and can be cloned into a new project. Visibility follows the project.
 
+## Keyboard
+
+`web/src/ui/keys.ts` is a small layered shortcut registry: a screen registers a set of bindings and
+gets back a function that removes them. Layers stack, the newest is asked first, and a layer marked
+`modal` (the drawing-sheet viewer) hides the ones beneath it. Modifiers must match exactly, so
+`Shift+→` never falls through to `→`; the exception is a printable character that Shift itself
+produced (`?`, `+`). Nothing fires while the focus is in an input, textarea, select or contenteditable
+unless the binding sets `whileTyping` (Save, Escape).
+
+Each binding carries its own label and group, and `?` builds the help card from the bindings that are
+live at that moment - the card cannot drift away from the software. Cross-sections are the main
+beneficiary in both workspaces (step, jump ten, first / last, go to a typed chainage, exaggeration,
+width), along with digits for panels and design stages, `Ctrl+S` on a road design, and the sheet
+viewer. `node e2e/keys_check.mjs <url> <terrainProject> [roadProject]` drives all of it in a browser,
+including the rule that typing in a box must not move the view.
+
 ## Visitor register and usage log
 
 Who reaches the server, and what they did with it. Both live in the application database next to the

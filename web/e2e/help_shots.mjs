@@ -158,6 +158,20 @@ if (did) {
   });
 } else console.log("no road design found: road screenshots skipped");
 
+// ---------------------------------------------------------------- keyboard shortcut card
+await tryStep("keyboard help", async () => {
+  await page.goto(`${base}/#/p/${tpid}`, { waitUntil: "networkidle" });
+  await page.waitForSelector(".workspace", { timeout: 60000 });
+  await settle(1500);
+  await page.evaluate(() => (window).__plm?.showCharts?.(true));
+  await settle(900);
+  await page.keyboard.press("?");
+  await page.waitForSelector(".keys-overlay .keys-dialog", { timeout: 10000 });
+  await settle(400);
+  await shot("keyboard-help", { el: ".keys-dialog" });
+  await page.keyboard.press("Escape");
+});
+
 // ---------------------------------------------------------------- visitor register
 // a second context with an unused address, and without the flag above, so the introduction form
 // really comes up for the picture

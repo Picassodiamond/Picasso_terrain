@@ -52,7 +52,7 @@ export function renderSectionsPanel(ws: Workspace, host: HTMLElement): void {
       als.length ? null : el("p", { class: "hint" }, "Draw an alignment first (Alignment tab)."),
     ));
 
-  host.append(el("p", { class: "hint" }, "Click a section line on the map or use ◀ ▶ (or arrow keys) in the chart pane to browse stations. Hover the charts to see the position on the map. Section lines can be hidden in the Layers panel."));
+  host.append(el("p", { class: "hint" }, "Click a section line on the map, or browse from the keyboard: ← → step one station, Shift ← → ten, Home / End the ends, G jumps to a chainage you type. Press ? for the full list. Hover the charts to see the position on the map. Section lines can be hidden in the Layers panel."));
 
   const setsEl = el("div");
   host.append(el("h3", {}, "Section sets"), setsEl);

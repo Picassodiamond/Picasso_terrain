@@ -283,3 +283,12 @@ table.data.compact td, table.data.compact th { padding: 2px 3px; font-size: 10.5
 table.data.compact select.mini { max-width: 78px; font-size: 10px; }
 table.data.compact select.mini.wide { max-width: 96px; }
 table.data.compact td:first-child { max-width: 74px; white-space: normal; line-height: 1.15; }
+
+/* keyboard shortcut help card (ui/keys.ts) */
+.keys-dialog { width: 640px; max-width: calc(100vw - 32px); max-height: calc(100vh - 80px); overflow: auto; }
+.keys-group { margin-bottom: 14px; }
+.keys-group h4 { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+table.keys-table td { padding: 3px 6px; }
+td.keys-combo { width: 170px; white-space: nowrap; }
+kbd { display: inline-block; min-width: 18px; text-align: center; padding: 1px 6px; margin-right: 4px; font: inherit; font-size: 11px;
+  background: var(--panel-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; color: var(--text); }

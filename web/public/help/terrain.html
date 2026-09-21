@@ -36,6 +36,7 @@
   <a href="#sections">Profile and cross-sections</a>
   <a href="#export">Export</a>
   <a href="#large">Large surveys</a>
+  <a href="#keys">Keyboard shortcuts</a>
 </aside>
 
 <main>
@@ -141,7 +142,26 @@
 <h2 id="large">Large surveys</h2>
 <p>Surveys of several hundred thousand points work: points stream to the map in a compact binary form, the terrain is drawn in tiles and the TIN is cached on the server. Builds on large surveys queue behind other jobs; the panel shows your position and an estimate. If a build would not fit in the server's memory it is refused with a message instead of failing halfway.</p>
 
-<footer>Picasso LandMesh help · updated 2026-09-20</footer>
+<h2 id="keys">Keyboard shortcuts</h2>
+<p>Reviewing a line means stepping through it station by station, so the cross-section pane is driven
+from the keyboard. Press <kbd>?</kbd> anywhere to see the list for the screen you are on.</p>
+<table>
+  <tr><th>Key</th><th>Does</th></tr>
+  <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next cross-section. The chart pane opens itself if it was closed.</td></tr>
+  <tr><td><kbd>Shift</kbd>+<kbd>←</kbd>/<kbd>→</kbd></td><td>Ten sections at a time (also <kbd>PgUp</kbd> / <kbd>PgDn</kbd>).</td></tr>
+  <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>First / last section of the set.</td></tr>
+  <tr><td><kbd>G</kbd></td><td>Go to a chainage you type — metres, or the <b>1+250</b> form. The nearest section is shown.</td></tr>
+  <tr><td><kbd>C</kbd></td><td>Show or hide the chart pane.</td></tr>
+  <tr><td><kbd>+</kbd> <kbd>−</kbd></td><td>More / less vertical exaggeration on both charts.</td></tr>
+  <tr><td><kbd>1</kbd> … <kbd>8</kbd></td><td>Side panels: Data, TIN, Contours, Alignment, Sections, Export, Team, Settings.</td></tr>
+  <tr><td><kbd>F</kbd></td><td>Zoom the map to the data.</td></tr>
+  <tr><td><kbd>Esc</kbd></td><td>Cancel the drawing tool in hand.</td></tr>
+  <tr><td><kbd>?</kbd></td><td>The shortcut card, built from whatever is active on the screen.</td></tr>
+</table>
+<p>Nothing fires while the cursor is in a text box, so you can type a chainage or a level without the
+view jumping about.</p>
+
+<footer>Picasso LandMesh help · updated 2026-09-21</footer>
 </main>
 </div>
 </body>
