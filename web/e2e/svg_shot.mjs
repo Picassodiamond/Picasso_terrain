@@ -11,6 +11,7 @@ const clip = process.argv.length >= 8 ? { x: Number(process.argv[4]), y: Number(
 const W = Math.round(1680 * zoom), H = Math.round(1188 * zoom);
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: Math.min(W, 16000), height: Math.min(H, 16000) } });
+await page.addInitScript(() => { window.__plmNoVisitorForm = true; });  // the visitor form must not block the check
 for (const f of readdirSync(dir).filter((f) => f.endsWith(".svg"))) {
   const svg = readFileSync(join(dir, f), "utf8");
   await page.setContent(`<html><body style="margin:0;background:#888"><div style="width:${W}px">${svg.replace(/width="[^"]+mm" height="[^"]+mm"/, `width="${W}" height="${H}"`)}</div></body></html>`);

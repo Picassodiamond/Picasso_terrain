@@ -38,6 +38,16 @@ class Settings:
     guest_max_projects: int = int(os.environ.get("PLM_GUEST_MAX_PROJECTS", "2"))
     guest_max_tin_runs: int = int(os.environ.get("PLM_GUEST_MAX_TIN_RUNS", "3"))
     guest_ttl_days: int = int(os.environ.get("PLM_GUEST_TTL_DAYS", "7"))
+    # visitor tracking: recognise a person by cookie, else by the address they connect from, offer the
+    # introduction form once, and log the major actions (see plm/api/visitors.py)
+    visitor_tracking: bool = field(default_factory=lambda: _env_bool("PLM_VISITOR_TRACKING", True))
+    visitor_intake: bool = field(default_factory=lambda: _env_bool("PLM_VISITOR_INTAKE", True))
+    # True makes the form compulsory before any major action; the default only offers it
+    visitor_intake_required: bool = field(default_factory=lambda: _env_bool("PLM_VISITOR_INTAKE_REQUIRED", False))
+    visitor_intake_repeat_days: int = int(os.environ.get("PLM_VISITOR_INTAKE_REPEAT_DAYS", "7"))
+    visitor_cookie_days: int = int(os.environ.get("PLM_VISITOR_COOKIE_DAYS", "365"))
+    visitor_visit_minutes: int = int(os.environ.get("PLM_VISITOR_VISIT_MINUTES", "30"))  # gap that starts a new visit
+    trust_proxy: bool = field(default_factory=lambda: _env_bool("PLM_TRUST_PROXY", True))  # read X-Forwarded-For
     # jobs: "inline" runs background jobs inside the web process (single server, default);
     # "worker" only enqueues and a separate `python -m plm.worker --loop 2` process executes them
     job_mode: str = os.environ.get("PLM_JOB_MODE", "inline")

@@ -119,6 +119,7 @@ table.data tr.selected td { background: #1e293b; }
 .overlay { position: fixed; inset: 0; background: rgba(2,6,23,.85); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .dialog { width: 380px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 22px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
 .dialog h2 { margin-bottom: 14px; }
+.dialog.wide { width: 560px; max-width: calc(100vw - 32px); }
 .error { color: #fca5a5; font-size: 12px; margin: 6px 0; }
 .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 60; }
 .toast { background: var(--panel-2); border: 1px solid var(--border); border-left: 4px solid var(--accent-2); padding: 8px 12px; border-radius: 8px; max-width: 360px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }

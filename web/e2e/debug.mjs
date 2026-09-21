@@ -2,6 +2,7 @@ import { chromium } from "playwright";
 const [base = "http://127.0.0.1:8011", pid = ""] = process.argv.slice(2);
 const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
 const page = await browser.newPage({ viewport: { width: 1400, height: 850 } });
+await page.addInitScript(() => { window.__plmNoVisitorForm = true; });  // the visitor form must not block the check
 page.on("pageerror", (e) => console.log("PAGEERROR:", e.message, e.stack?.split("\n").slice(0, 4).join(" | ")));
 page.on("console", (m) => { if (m.type() !== "debug") console.log(`CONSOLE[${m.type()}]:`, m.text().slice(0, 400)); });
 page.on("requestfailed", (r) => console.log("REQFAIL:", r.url(), r.failure()?.errorText));

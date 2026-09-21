@@ -322,3 +322,43 @@ class JobOut(BaseModel):
     created: str
     started: str | None = None
     finished: str | None = None
+
+# ---------------------------------------------------------------- visitors
+class VisitorIntakeIn(BaseModel):
+    """The short introduction form a first-time visitor is offered."""
+    name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=3, max_length=160)
+    phone: str = Field("", max_length=40)
+    designation: str = Field("", max_length=120)
+    organisation: str = Field("", max_length=160)
+    district: str = Field("", max_length=80)
+    purpose: str = Field("", max_length=200)
+    notes: str = Field("", max_length=500)
+
+
+class VisitorOut(BaseModel):
+    id: str = ""
+    ip: str = ""
+    first_seen: str = ""
+    last_seen: str = ""
+    visits: int = 0
+    registered: bool = False
+    actions: int = 0
+    name: str = ""
+    email: str = ""
+    phone: str = ""
+    designation: str = ""
+    organisation: str = ""
+    district: str = ""
+    purpose: str = ""
+
+
+class VisitorStateOut(BaseModel):
+    """What the browser needs at start-up: is this a first visit, and should the form be shown."""
+    tracking: bool = True
+    intake_enabled: bool = True
+    intake_required: bool = False
+    first_visit: bool = False
+    needs_intake: bool = False
+    visitor: VisitorOut | None = None
+    prefill: dict[str, str] = {}

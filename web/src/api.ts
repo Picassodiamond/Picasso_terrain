@@ -42,6 +42,15 @@ export interface StructureKind { label: string; group: "wall" | "cross" | "drain
 export interface StructuresPayload { structures: any[]; kinds: Record<string, StructureKind>; soil: string; checks: any[];
   catalogue: { kinds: Record<string, StructureKind>; wall_types: Record<string, any>; drain_types: Record<string, any>; culvert_types: Record<string, any>; materials: Record<string, { label: string; unit: string }>; groups: Record<string, string[]> };
   quantities: { rows: any[]; totals: Record<string, number>; by_kind: Record<string, { count: number; length: number }>; materials: Record<string, { label: string; unit: string }> } }
+export interface Visitor { id: string; ip: string; first_seen: string; last_seen: string; visits: number; registered: boolean; actions: number;
+  name: string; email: string; phone: string; designation: string; organisation: string; district: string; purpose: string }
+export interface VisitorState { tracking: boolean; intake_enabled: boolean; intake_required: boolean; first_visit: boolean; needs_intake: boolean;
+  visitor: Visitor | null; prefill: Record<string, string> }
+export interface VisitorRow extends Visitor { registered: any; declined_at: string | null; user_id: string | null; user_agent: string; notes: string }
+export interface UsageRow { id: number; created: string; visitor_id: string | null; ip: string; user_id: string | null; username: string; visitor_name: string;
+  project_id: string; module: string; action: string; label: string; target_id: string; method: string; path: string; status: number; ms: number; detail: Record<string, any> }
+export interface UsageSummary { visitors: number; registered: number; active_today: number; logged_actions: number; days: number;
+  by_action: { action: string; label: string; n: number; visitors: number; last: string }[]; labels: Record<string, string> }
 export interface PointDetail { fid: number; id: string; x: number; y: number; z: number; remark: string; layer: string; source: string }
 export interface TileIndex { n: number; tile_triangles: number; n_triangles: number; n_nodes: number; bounds: number[]; z_range: number[]; tiles: { i: number; j: number; triangles: number; bounds: number[] }[] }
 
@@ -65,6 +74,14 @@ async function request<T>(method: string, url: string, body?: unknown, init: Req
     notify(`Server busy - retrying in ${wait} s`, "info");
     await new Promise((r) => setTimeout(r, wait * 1000));
     return request<T>(method, url, body, init, attempt + 1);
+  }
+  if (res.status === 428 && attempt < 1) {
+    // the server wants the visitor form filled first: let the UI put it up, then repeat the action
+    const ok = await new Promise<boolean>((resolve) => {
+      document.dispatchEvent(new CustomEvent("plm:visitor-intake", { detail: { resolve } }));
+      setTimeout(() => resolve(false), 300000);
+    });
+    if (ok) return request<T>(method, url, body, init, attempt + 1);
   }
   if (!res.ok) {
     let detail = res.statusText;
@@ -98,6 +115,16 @@ export const api = {
     users: () => request<AdminUser[]>("GET", "/api/auth/users"),
     createUser: (body: Record<string, unknown>) => request<AdminUser>("POST", "/api/auth/users", body),
     patchUser: (id: string, body: Record<string, unknown>) => request<AdminUser>("PATCH", `/api/auth/users/${id}`, body),
+  },
+  visitor: {
+    me: () => request<VisitorState>("GET", "/api/visitor/me"),
+    intake: (body: Record<string, string>) => request<VisitorState>("POST", "/api/visitor/intake", body),
+    skip: () => request<{ ok: boolean; repeat_days: number }>("POST", "/api/visitor/skip"),
+    summary: (days = 30) => request<UsageSummary>("GET", `/api/visitor/admin/summary${q({ days })}`),
+    list: (params: Record<string, unknown> = {}) => request<VisitorRow[]>("GET", `/api/visitor/admin/visitors${q(params)}`),
+    usage: (params: Record<string, unknown> = {}) => request<{ rows: UsageRow[]; labels: Record<string, string> }>("GET", `/api/visitor/admin/usage${q(params)}`),
+    visitorsCsvUrl: () => "/api/visitor/admin/visitors.csv",
+    usageCsvUrl: (params: Record<string, unknown> = {}) => `/api/visitor/admin/usage.csv${q(params)}`,
   },
   health: () => request<Health>("GET", "/api/health"),
   catalogue: {

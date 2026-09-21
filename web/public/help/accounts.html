@@ -31,6 +31,7 @@
   <a href="#library">The Library</a>
   <a href="#archive">Archiving and backups</a>
   <a href="#load">When the server is busy</a>
+  <a href="#visitors">Who is using the server</a>
   <a href="#admin">Administrator page</a>
 </aside>
 
@@ -90,8 +91,24 @@
   <li>The workspace shows a banner while the server is under heavy load.</li>
 </ul>
 
+<h2 id="visitors">Who is using the server</h2>
+<p>The first time you reach this server from your office connection you are asked to introduce
+yourself: <b>name, email, phone, designation, organisation and district</b>. It takes a moment and it
+is what lets the people running the server support you and tell you when a standard or a module
+changes. You may answer <b>Not now</b>; the form comes back after a few days. Once answered, it is
+never shown again from that connection - the server remembers the address and sets a cookie.</p>
+<img src="img/visitor-form.jpg" alt="The introduction form on a first visit">
+<p>From then on, every <b>major action</b> is written into a register: importing a survey, building a
+terrain model, generating contours, saving an alignment, cutting cross-sections, starting a design,
+saving the grade line or template, building the corridor, and every export. Ordinary looking around -
+panning the map, opening a panel, re-reading a table - is not recorded.</p>
+<p>The administrator reads the register on the <b>Admin</b> page under <b>Visitors &amp; usage</b>:
+who has been here, what they gave, how many visits and actions each has made, and the activity log
+itself, filtered by person or by kind of activity and downloadable as CSV for a report.</p>
+<img src="img/visitor-register.jpg" alt="The visitor register and activity log on the Admin page">
+
 <h2 id="admin">Administrator page</h2>
-<p>Administrators see an <b>Admin</b> button on the projects page. There they <b>create accounts</b> (username, password, role, organisation, full name, email, notes), <b>edit details</b>, set a <b>new password</b>, disable accounts and list every project. The same actions are available from the command line on the server for scripted setups.</p>
+<p>Administrators see an <b>Admin</b> button on the projects page. The page has two tabs: <b>Accounts</b> and <b>Visitors &amp; usage</b>. On the first they <b>create accounts</b> (username, password, role, organisation, full name, email, notes), <b>edit details</b>, set a <b>new password</b>, disable accounts and list every project. The same actions are available from the command line on the server for scripted setups.</p>
 
 <footer>Picasso LandMesh help · updated 2026-09-20</footer>
 </main>

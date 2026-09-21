@@ -33,6 +33,7 @@ console.log(`server ok: ${users.length + 1} account(s), guest sandbox ${st.guest
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+await page.addInitScript(() => { window.__plmNoVisitorForm = true; });  // the visitor form must not block the check
 const errors = [];
 page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
 page.on("console", (m) => { if (m.type() === "error") errors.push(`console: ${m.text()}`); });

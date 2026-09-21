@@ -17,6 +17,7 @@ mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+await page.addInitScript(() => { window.__plmNoVisitorForm = true; });  // the visitor form must not block the check
 page.on("dialog", (d) => d.accept());
 const idle = () => page.waitForFunction(() => !document.querySelector(".busy") || getComputedStyle(document.querySelector(".busy")).display === "none", null, { timeout: 180000 });
 const settle = (ms = 1200) => page.waitForTimeout(ms);
@@ -156,6 +157,39 @@ if (did) {
     await page.keyboard.press("Escape");
   });
 } else console.log("no road design found: road screenshots skipped");
+
+// ---------------------------------------------------------------- visitor register
+// a second context with an unused address, and without the flag above, so the introduction form
+// really comes up for the picture
+await tryStep("visitor form", async () => {
+  const ip = `203.0.113.${1 + Math.floor(Math.random() * 250)}`;
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, extraHTTPHeaders: { "X-Forwarded-For": ip } });
+  const vp = await ctx.newPage();
+  vp.on("dialog", (d) => d.accept());
+  await vp.goto(`${base}/`, { waitUntil: "networkidle" });
+  await vp.waitForSelector(".overlay .dialog", { timeout: 30000 });
+  const fill = async (label, value) => vp.locator(".overlay label.field", { hasText: label }).locator("input").first().fill(value);
+  await fill("Name", "Anjana Poudel");
+  await fill("Email", "anjana.poudel@dor.gov.np");
+  await fill("Phone", "9841234567");
+  await fill("Designation", "Divisional Engineer");
+  await fill("Organisation", "Department of Roads, Pokhara");
+  await fill("District", "Kaski");
+  await fill("What will you use it for", "Rural road alignment and earthworks");
+  await vp.waitForTimeout(500);
+  await vp.screenshot({ path: `${outDir}visitor-form.jpg`, type: "jpeg", quality: 84, animations: "disabled" });
+  console.log("wrote visitor-form");
+  await vp.locator(".overlay button", { hasText: "Not now" }).first().dispatchEvent("click");
+  await ctx.close();
+});
+
+await tryStep("visitor register", async () => {
+  await page.goto(`${base}/#/admin`, { waitUntil: "networkidle" });
+  await page.locator("button.mtab", { hasText: "Visitors" }).first().dispatchEvent("click");
+  await page.waitForSelector("#admin-visitors table.data", { timeout: 30000 });
+  await settle(1200);
+  await shot("visitor-register");
+});
 
 await browser.close();
 console.log("done ->", outDir);

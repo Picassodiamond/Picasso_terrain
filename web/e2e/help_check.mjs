@@ -6,6 +6,7 @@ const base = process.argv[2] || "http://127.0.0.1:8000";
 const pages = ["index", "terrain", "road", "standards", "accounts", "faq"];
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+await page.addInitScript(() => { window.__plmNoVisitorForm = true; });  // the visitor form must not block the check
 let bad = 0;
 for (const p of pages) {
   const res = await page.goto(`${base}/help/${p}.html`, { waitUntil: "networkidle" });

@@ -107,6 +107,34 @@ max_edge_length=..., min_angle_deg=...)` -> `TinResult` (TIN, rejected triangles
 * **Library** (`#/library`): every TIN run and design is catalogued with a WGS84 footprint, size, CRS, tags and lineage,
   searchable by text, tag and bounding box, and can be cloned into a new project. Visibility follows the project.
 
+## Visitor register and usage log
+
+Who reaches the server, and what they did with it. Both live in the application database next to the
+accounts; `plm/api/visitors.py` holds the whole of it.
+
+* **First-time detection.** Every `/api` request is attributed to a *visitor*: a long-lived signed
+  cookie (`plm_visitor`) first, and failing that the address the request arrives from, so a person who
+  comes back from the same office connection is recognised without being asked again. Behind cPanel /
+  Passenger or nginx the address is the first hop of `X-Forwarded-For` (`PLM_TRUST_PROXY`, default on);
+  set it to 0 when the server is exposed directly.
+* **Introduction form.** A visitor who has not introduced themselves is offered a short form - name,
+  email, phone, designation, organisation, district, what they intend to use it for - over the top of
+  the loading software, so nothing is blocked. **Not now** silences it for `PLM_VISITOR_INTAKE_REPEAT_DAYS`
+  (7). `PLM_VISITOR_INTAKE_REQUIRED=1` makes it compulsory instead: major actions answer 428 and the
+  browser puts the form up and repeats the action. `PLM_VISITOR_TRACKING=0` switches the whole thing off.
+* **Usage log.** A middleware matches each request against the table of *major* activities in
+  `visitors.ACTIONS` - import, breakline, constraint detection, TIN, contours, alignment, sections,
+  design creation, road horizontal / vertical / template / corridor / structures, and every export -
+  and writes one `usage_log` row: visitor, account, address, project, module, label, status and
+  duration. Reads are not logged, and a failed request is not logged. Adding an activity is one line
+  in that table, not a change to the router.
+* **Administration.** `#/admin` &rarr; **Visitors & usage**: counts, the register of people with what
+  they gave, the activity log filtered by person or activity, what was used over the last 30 days, and
+  CSV downloads of both tables (`/api/visitor/admin/visitors.csv`, `.../usage.csv`). Admin role only.
+* **Checks.** `pytest tests/test_visitors.py` covers detection, the form, enforcement and the log;
+  `node e2e/visitor_check.mjs http://127.0.0.1:8000` drives the whole thing in a browser from a fresh
+  address.
+
 ## Modules and design workspaces
 
 The terrain workspace is the core. Design work happens in separate **design workspaces** (modules)

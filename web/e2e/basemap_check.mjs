@@ -14,6 +14,7 @@ mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
 const page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
+await page.addInitScript(() => { window.__plmNoVisitorForm = true; });  // the visitor form must not block the check
 const tiles = { ok: 0, failed: 0, urls: new Set() };
 page.on("response", (r) => {
   const u = r.url();

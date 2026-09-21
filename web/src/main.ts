@@ -4,6 +4,7 @@ import { api, ApiError, type Project } from "./api";
 import { store } from "./state";
 import { el } from "./ui/dom";
 import { renderLogin } from "./ui/login";
+import { askVisitor, maybeAskVisitor, shouldAsk } from "./ui/visitor";
 import { renderProjects } from "./ui/projects";
 import { renderLibrary } from "./ui/library";
 import { renderAdmin } from "./ui/admin";
@@ -29,6 +30,16 @@ store.subscribe("auth:login", () => {
   const status = authStatus;
   if (!status) return;
   renderLogin(root, status, () => location.reload(), () => { destroyCurrent(); void showProjects(); });
+});
+
+// a request refused with 428 (the visitor form is compulsory on this server): show it, then retry
+document.addEventListener("plm:visitor-intake", (e) => {
+  const resolve = (e as CustomEvent).detail.resolve as (ok: boolean) => void;
+  void api.visitor.me().then(async (st) => {
+    if (!shouldAsk(st)) { resolve(false); return; }
+    await askVisitor(document.body, st);
+    resolve(true);
+  }).catch(() => resolve(false));
 });
 
 interface Route { pid: string; module?: string; designId?: number }
@@ -97,6 +108,8 @@ async function boot(): Promise<void> {
     }
     throw e;
   }
+  // first visit from this address: ask who we are working with, over the top of the loading software
+  void maybeAskVisitor(document.body);
   const r = routeFromHash();
   if (r) {
     try {

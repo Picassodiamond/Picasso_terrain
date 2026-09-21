@@ -1,8 +1,11 @@
-/** Administration: accounts are invite-only. The admin creates each account here, sets role,
- *  organisation and details, resets passwords and disables accounts. Route #/admin (admins only). */
+/** Administration. Two tabs: **accounts** (invite-only - the admin creates each account here, sets
+ *  role, organisation and details, resets passwords and disables accounts) and **visitors** (who has
+ *  reached the server, the details they gave on their first visit, and the log of major activities).
+ *  Route #/admin (admins only). */
 import { api, ApiError, type AdminUser } from "../api";
 import { store, toast } from "../state";
 import { button, el, field, select } from "./dom";
+import { renderVisitors } from "./visitorsAdmin";
 
 export async function renderAdmin(root: HTMLElement): Promise<void> {
   root.innerHTML = "";
@@ -11,9 +14,29 @@ export async function renderAdmin(root: HTMLElement): Promise<void> {
   root.appendChild(page);
   page.appendChild(el("div", { style: "display:flex;align-items:center;gap:12px;margin-bottom:14px" },
     el("h1", { style: "color:var(--accent);cursor:pointer", onClick: () => { location.hash = ""; } }, "▲ Picasso LandMesh"),
-    el("span", { class: "muted" }, "Administration · accounts"),
+    el("span", { class: "muted" }, "Administration"),
     el("span", { style: "flex:1" }), button("Projects", () => { location.hash = ""; }, "btn small")));
   if (me?.role !== "admin") { page.appendChild(el("p", { class: "error" }, "Administrator role required.")); return; }
+
+  // tabs: accounts | visitors and usage
+  const body = el("div");
+  const tabs = el("div", { style: "display:flex;gap:6px;margin-bottom:12px" });
+  const accountsPane = el("div");
+  const visitorsPane = el("div", { id: "admin-visitors", style: "display:none" });
+  body.append(accountsPane, visitorsPane);
+  const tabButtons: HTMLButtonElement[] = [];
+  const show = (which: "accounts" | "visitors") => {
+    accountsPane.style.display = which === "accounts" ? "" : "none";
+    visitorsPane.style.display = which === "visitors" ? "" : "none";
+    tabButtons.forEach((b, i) => { b.className = `mtab${(i === 0) === (which === "accounts") ? " active" : ""}`; });
+    if (which === "visitors") void renderVisitors(visitorsPane);
+  };
+  tabButtons.push(button("Accounts", () => show("accounts"), "mtab active"),
+                  button("Visitors & usage", () => show("visitors"), "mtab"));
+  tabs.append(...tabButtons);
+  page.append(tabs, body);
+
+  const page2 = accountsPane;  // the account screens below live on the first tab
 
   // create
   const username = el("input", { type: "text", placeholder: "username (3+ chars, letters, digits . _ @ -)" });
@@ -26,7 +49,7 @@ export async function renderAdmin(root: HTMLElement): Promise<void> {
   const err = el("div", { class: "error" });
   const genPw = () => { const a = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"; password.value = Array.from({ length: 12 }, () => a[Math.floor(Math.random() * a.length)]).join(""); };
   genPw();
-  page.appendChild(el("div", { class: "card" }, el("h3", {}, "Create an account"),
+  page2.appendChild(el("div", { class: "card" }, el("h3", {}, "Create an account"),
     el("p", { class: "hint" }, "Registration is closed. You create every account and hand the username and password to the person; they can be changed here at any time."),
     el("div", { class: "row" }, field("Username", username), field("Password", password), field("Role", role)),
     el("div", { class: "row" }, field("Full name", fullName), field("Organisation", org)),
@@ -45,7 +68,7 @@ export async function renderAdmin(root: HTMLElement): Promise<void> {
 
   // list
   const usersEl = el("div");
-  page.append(el("h3", { style: "margin-top:20px" }, "Accounts"), usersEl);
+  page2.append(el("h3", { style: "margin-top:20px" }, "Accounts"), usersEl);
   async function renderUsers() {
     usersEl.innerHTML = "";
     const users: AdminUser[] = await api.auth.users();

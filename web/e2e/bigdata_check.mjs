@@ -15,6 +15,7 @@ mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
 const page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
+await page.addInitScript(() => { window.__plmNoVisitorForm = true; });  // the visitor form must not block the check
 const errors = [];
 const requests = { tiles: 0, mesh: 0, pointsBin: 0, pointsGeojson: 0, nearest: 0, bytes: 0 };
 page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));

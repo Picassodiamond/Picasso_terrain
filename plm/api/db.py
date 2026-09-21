@@ -1,4 +1,4 @@
-"""Application database (SQLite): users, projects, jobs."""
+"""Application database (SQLite): users, projects, jobs, visitors and the usage log."""
 from __future__ import annotations
 
 import hashlib
@@ -62,6 +62,24 @@ CREATE TABLE IF NOT EXISTS alignment_versions (
     user_id TEXT, username TEXT, note TEXT DEFAULT '', data TEXT NOT NULL, created TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_aln_versions ON alignment_versions(project_id, alignment_id, version);
+CREATE TABLE IF NOT EXISTS visitors (
+    id TEXT PRIMARY KEY, ip TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
+    visits INTEGER NOT NULL DEFAULT 1, user_agent TEXT DEFAULT '', registered INTEGER NOT NULL DEFAULT 0,
+    registered_at TEXT, declined_at TEXT, user_id TEXT,
+    name TEXT DEFAULT '', email TEXT DEFAULT '', phone TEXT DEFAULT '', designation TEXT DEFAULT '',
+    organisation TEXT DEFAULT '', district TEXT DEFAULT '', purpose TEXT DEFAULT '', notes TEXT DEFAULT '',
+    actions INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_visitors_ip ON visitors(ip, last_seen);
+CREATE TABLE IF NOT EXISTS usage_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT NOT NULL, visitor_id TEXT, ip TEXT DEFAULT '',
+    user_id TEXT, username TEXT DEFAULT '', visitor_name TEXT DEFAULT '', project_id TEXT DEFAULT '',
+    module TEXT DEFAULT '', action TEXT NOT NULL, label TEXT DEFAULT '', target_id TEXT DEFAULT '',
+    method TEXT DEFAULT '', path TEXT DEFAULT '', status INTEGER DEFAULT 0, ms INTEGER DEFAULT 0,
+    detail TEXT DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_log(id DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_visitor ON usage_log(visitor_id, id);
 CREATE TABLE IF NOT EXISTS catalogue (
     id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL, ref_id INTEGER NOT NULL, name TEXT DEFAULT '',
     module TEXT DEFAULT '', crs TEXT, footprint TEXT, bounds TEXT, lon REAL, lat REAL, points INTEGER, triangles INTEGER,
@@ -590,3 +608,129 @@ class AppDB:
         vals.append(jid)
         with self._lock, self._connect() as c:
             c.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
+
+    # ------------------------------------------------------------------ visitors
+    VISITOR_FIELDS = ("name", "email", "phone", "designation", "organisation", "district", "purpose", "notes")
+
+    def get_visitor(self, vid: str) -> dict | None:
+        with self._connect() as c:
+            r = c.execute("SELECT * FROM visitors WHERE id=?", (vid,)).fetchone()
+        return dict(r) if r else None
+
+    def visitor_by_ip(self, ip: str) -> dict | None:
+        """The most useful earlier visit from this address: a registered one if there is one, else the
+        latest. This is what makes a returning person on the same connection a known visitor."""
+        with self._connect() as c:
+            r = c.execute("SELECT * FROM visitors WHERE ip=? ORDER BY registered DESC, last_seen DESC LIMIT 1",
+                          (ip,)).fetchone()
+        return dict(r) if r else None
+
+    def visitor_for_user(self, user_id: str) -> dict | None:
+        with self._connect() as c:
+            r = c.execute("SELECT * FROM visitors WHERE user_id=? ORDER BY registered DESC, last_seen DESC LIMIT 1",
+                          (user_id,)).fetchone()
+        return dict(r) if r else None
+
+    def create_visitor(self, ip: str, user_agent: str = "", user_id: str | None = None) -> dict:
+        vid = new_id(16)
+        ts = now_iso()
+        with self._lock, self._connect() as c:
+            c.execute("INSERT INTO visitors(id, ip, first_seen, last_seen, visits, user_agent, user_id) VALUES (?,?,?,?,1,?,?)",
+                      (vid, ip, ts, ts, user_agent[:400], user_id))
+        return self.get_visitor(vid)  # type: ignore[return-value]
+
+    def touch_visitor(self, vid: str, ip: str = "", user_id: str | None = None, new_visit: bool = False) -> None:
+        with self._lock, self._connect() as c:
+            c.execute("UPDATE visitors SET last_seen=?, visits=visits+?, ip=COALESCE(NULLIF(?,''), ip),"
+                      " user_id=COALESCE(?, user_id) WHERE id=?",
+                      (now_iso(), 1 if new_visit else 0, ip, user_id, vid))
+
+    def register_visitor(self, vid: str, fields: dict, user_id: str | None = None) -> dict | None:
+        sets = ["registered=1", "registered_at=?", "declined_at=NULL"]
+        vals: list[Any] = [now_iso()]
+        for k in self.VISITOR_FIELDS:
+            if fields.get(k) is not None:
+                sets.append(f"{k}=?")
+                vals.append(str(fields[k])[:200])
+        if user_id:
+            sets.append("user_id=?")
+            vals.append(user_id)
+        vals.append(vid)
+        with self._lock, self._connect() as c:
+            c.execute(f"UPDATE visitors SET {', '.join(sets)} WHERE id=?", vals)
+        return self.get_visitor(vid)
+
+    def decline_visitor(self, vid: str) -> None:
+        with self._lock, self._connect() as c:
+            c.execute("UPDATE visitors SET declined_at=? WHERE id=?", (now_iso(), vid))
+
+    def list_visitors(self, registered: bool | None = None, q: str = "", limit: int = 500) -> list[dict]:
+        sql = "SELECT * FROM visitors"
+        where, vals = [], []
+        if registered is not None:
+            where.append("registered=?")
+            vals.append(int(registered))
+        if q:
+            like = f"%{q}%"
+            where.append("(ip LIKE ? OR name LIKE ? OR email LIKE ? OR phone LIKE ? OR organisation LIKE ? OR designation LIKE ?)")
+            vals += [like] * 6
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY last_seen DESC LIMIT ?"
+        vals.append(limit)
+        with self._connect() as c:
+            return [dict(r) for r in c.execute(sql, vals)]
+
+    def visitor_counts(self) -> dict:
+        with self._connect() as c:
+            row = c.execute("SELECT COUNT(*) n, SUM(registered) reg FROM visitors").fetchone()
+            today = c.execute("SELECT COUNT(*) n FROM visitors WHERE last_seen>=?",
+                              (now_iso()[:10],)).fetchone()
+            acts = c.execute("SELECT COUNT(*) n FROM usage_log").fetchone()
+        return {"visitors": row["n"] or 0, "registered": row["reg"] or 0, "active_today": today["n"] or 0,
+                "logged_actions": acts["n"] or 0}
+
+    # ------------------------------------------------------------------ usage log
+    def log_usage(self, action: str, *, label: str = "", visitor: dict | None = None, user: dict | None = None,
+                  project_id: str = "", module: str = "", target_id: str | int = "", method: str = "", path: str = "",
+                  status: int = 0, ms: int = 0, detail: dict | None = None) -> None:
+        v = visitor or {}
+        u = user or {}
+        with self._lock, self._connect() as c:
+            c.execute(
+                "INSERT INTO usage_log(created, visitor_id, ip, user_id, username, visitor_name, project_id, module,"
+                " action, label, target_id, method, path, status, ms, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (now_iso(), v.get("id"), v.get("ip", ""), u.get("id"), u.get("username", ""), v.get("name", ""),
+                 project_id, module, action, label, str(target_id), method, path, int(status), int(ms),
+                 json.dumps(detail or {})),
+            )
+            if v.get("id"):
+                c.execute("UPDATE visitors SET actions=actions+1 WHERE id=?", (v["id"],))
+
+    def usage_log(self, visitor_id: str = "", project_id: str = "", action: str = "", since_id: int = 0,
+                  limit: int = 200) -> list[dict]:
+        sql = "SELECT * FROM usage_log"
+        where, vals = [], []
+        for col, val in (("visitor_id", visitor_id), ("project_id", project_id), ("action", action)):
+            if val:
+                where.append(f"{col}=?")
+                vals.append(val)
+        if since_id:
+            where.append("id>?")
+            vals.append(since_id)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC LIMIT ?"
+        vals.append(limit)
+        with self._connect() as c:
+            rows = [dict(r) for r in c.execute(sql, vals)]
+        for r in rows:
+            r["detail"] = json.loads(r.get("detail") or "{}")
+        return rows
+
+    def usage_by_action(self, days: int = 30) -> list[dict]:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat()
+        with self._connect() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT action, label, COUNT(*) n, COUNT(DISTINCT visitor_id) visitors, MAX(created) last"
+                " FROM usage_log WHERE created>=? GROUP BY action ORDER BY n DESC", (since,))]
