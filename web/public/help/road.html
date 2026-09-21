@@ -58,9 +58,9 @@
 <table>
   <tr><th>Area</th><th>What you do there</th></tr>
   <tr><td><b>Stage panel</b></td><td>The seven stages with their status (<span class="badge ok">done</span>, todo, <span class="badge warn">unsaved</span>). Click a stage to open its cards; tables in the cards edit the same data as the drag handles on the plan and profile.</td></tr>
-  <tr><td><b>Plan</b></td><td>Project coordinates, north up. Layer chips switch the terrain extent, contours, constraint lines, corridor daylight lines, structures and the alignment; <b>Fit</b> and <b>Fit alignment</b> frame the view. Move the mouse to read chainage and offset in the status bar; click to show the cross-section there. On the Alignment stage the IP squares can be dragged.</td></tr>
+  <tr><td><b>Plan</b></td><td>Project coordinates, north up. The <b>tool palette</b> at the left of the strip above the plan decides what the left button does: <b>Select / move</b> (drag a node, drag the background to pan), <b>Pan</b>, <b>Zoom</b> (click in, Alt-click out, drag a box) and <b>Delete node</b>. The pointer changes shape to match, so you can see what a click will do before you make it. Layer chips switch the terrain extent, contours, constraint lines, corridor daylight lines, structures and the alignment; <b>Fit</b> and <b>Fit alignment</b> frame the view. Move the mouse to read chainage and offset in the status bar; click to show the cross-section there. On the Alignment stage the IP squares can be dragged.</td></tr>
   <tr><td><b>Longitudinal profile</b></td><td>Ground line from the terrain snapshot and the design grade with draggable PVIs. Choose the vertical exaggeration (V ×2 … ×20). Hovering shows the cursor on the plan.</td></tr>
-  <tr><td><b>Cross-section</b></td><td>Ground and design at the chainage shown at the top; step with <b>◀ ▶</b>, choose the step (every 20 m) and the half-width.</td></tr>
+  <tr><td><b>Cross-section</b></td><td>Ground and design at the chainage shown at the top, with the <b>walls and drains</b> that cover that chainage drawn where they will appear on the drawing sheet — wall bodies hatched with their foundation dashed, drain channels at their offset. A retaining or breast wall is drawn <b>standing on the ground and reaching the formation edge</b>, because spanning that drop is what it is for; when the height recorded against the structure differs from the drop the section needs, the label says both (<i>Retaining wall 24.7 m (recorded 4.5 m)</i>) rather than quietly drawing one of them. Move an IP and the section is redrawn against the new centre line, marked <i>alignment unsaved</i> until you save and rebuild the corridor. Step with <b>◀ ▶</b> or the arrow keys; choose the step (every 20 m) and the half-width.</td></tr>
 </table>
 
 <h2 id="alignment">1 · Alignment</h2>
@@ -206,10 +206,12 @@
 <h2 id="keys">Mouse and keyboard</h2>
 <table>
   <tr><th>Where</th><th>Action</th></tr>
-  <tr><td>Plan</td><td>Drag to pan, wheel to zoom, click to show the cross-section at that chainage, drag an IP square (Alignment stage) to move it.</td></tr>
-  <tr><td>Profile</td><td>Drag a PVI to move it (saves on release); hover to read chainage and levels.</td></tr>
+  <tr><td>Plan — tools</td><td><kbd>S</kbd> select / move, <kbd>P</kbd> pan, <kbd>Z</kbd> zoom, <kbd>D</kbd> delete node (it asks first, and <kbd>Esc</kbd> always returns to Select). The status line under the plan names the tool in hand. The wheel always zooms and the palette always shows which tool is in hand.</td></tr>
+  <tr><td>Plan — pointer</td><td><b>Move</b> over a node you can drag, <b>grab</b> / <b>grabbing</b> while panning, <b>zoom-in</b> under the zoom tool, <b>not-allowed</b> when the delete tool is not over a node. Deleting is only offered on the Alignment stage, and never below two IPs.</td></tr>
+  <tr><td>Profile</td><td>PVI handles show <b>move</b>; the first and last PVI show <b>ns-resize</b> because they are pinned in chainage and only their level can change. Dragging saves on release.</td></tr>
   <tr><td>Cross-section</td><td><kbd>←</kbd> <kbd>→</kbd> step one station, <kbd>Shift</kbd>+<kbd>←</kbd>/<kbd>→</kbd> five, <kbd>Home</kbd> <kbd>End</kbd> the ends of the alignment, <kbd>G</kbd> to type a chainage, <kbd>[</kbd> <kbd>]</kbd> narrower / wider, <kbd>+</kbd> <kbd>−</kbd> vertical exaggeration. The buttons in the header do the same.</td></tr>
   <tr><td>Stages</td><td><kbd>1</kbd> … <kbd>7</kbd> jump straight to Alignment, Profile, Templates, Earthworks, Structures, Drainage, Output.</td></tr>
+  <tr><td>Properties</td><td>Click an IP on the plan, or a row in the structures table, and the <b>properties card</b> at the bottom left of the plan shows its values with their units. Change them there and press <b>Apply</b>; the message says what still has to be saved or rebuilt.</td></tr>
   <tr><td>Saving</td><td><kbd>Ctrl</kbd>+<kbd>S</kbd> saves everything the design has outstanding, in the right order (alignment, then grade line, then templates, then structures).</td></tr>
   <tr><td>Sheet viewer</td><td><kbd>←</kbd> <kbd>→</kbd> previous / next sheet, <kbd>Home</kbd> <kbd>End</kbd> first / last, <kbd>+</kbd> <kbd>−</kbd> zoom, <kbd>0</kbd> or <kbd>F</kbd> fit, <kbd>D</kbd> download the DXF, <kbd>Esc</kbd> closes. Wheel zooms, drag pans, double-click fits.</td></tr>
   <tr><td>Everywhere</td><td><kbd>?</kbd> opens a card listing every shortcut that works on the screen you are on, so this table can never go out of date. Shortcuts stay quiet while you are typing in a box. Unsaved changes are flagged in the top bar and on the stage; the browser warns before you leave with unsaved edits.</td></tr>
@@ -217,7 +219,7 @@
 
 <p><img src="img/keyboard-help.jpg" alt="The keyboard shortcut card, opened with the ? key"></p>
 
-<footer>Picasso LandMesh help · updated 2026-09-21</footer>
+<footer>Picasso LandMesh help · updated 2026-09-22</footer>
 </main>
 </div>
 </body>

@@ -97,7 +97,10 @@ export function renderProfile(container: HTMLElement, points: ProfilePoint[], op
     const handles = g.selectAll(".pvi").data(pvis).enter().append("circle").attr("class", "pvi").attr("r", 6)
       .attr("cx", (p) => x(p.chainage)).attr("cy", (p) => y(p.z));
     if (opts.onPviDrag) {
-      handles.style("cursor", "grab").call(d3.drag<SVGCircleElement, ProfilePVI>()
+      // the first and last PVI are pinned in chainage and only move in level, so they say so
+      const rest = (p: ProfilePVI) => (p.index === 0 || p.index === pvis.length - 1 ? "ns-resize" : "move");
+      handles.classed("pvi-handle", true).style("cursor", rest).call(d3.drag<SVGCircleElement, ProfilePVI>()
+        .on("start", (ev) => { d3.select(ev.sourceEvent.target as SVGCircleElement).style("cursor", "grabbing"); })
         .on("drag", (ev, p) => {
           const first = p.index === 0, last = p.index === pvis.length - 1;
           const ch = first || last ? p.chainage : Math.min(Math.max(x.invert(ev.x), pvis[p.index - 1].chainage + 1), pvis[p.index + 1].chainage - 1);
@@ -108,7 +111,10 @@ export function renderProfile(container: HTMLElement, points: ProfilePoint[], op
           drawLabels();
           opts.onPviDrag?.(p.index, ch, z, "move");
         })
-        .on("end", (_ev, p) => opts.onPviDrag?.(p.index, p.chainage, p.z, "end")));
+        .on("end", (ev, p) => {
+          d3.select(ev.sourceEvent.target as SVGCircleElement).style("cursor", rest(p));
+          opts.onPviDrag?.(p.index, p.chainage, p.z, "end");
+        }));
     }
   }
   for (const m of opts.markers || []) {

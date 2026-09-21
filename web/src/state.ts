@@ -17,13 +17,15 @@ export interface AppState {
   tool: "none" | "alignment" | "line" | "comment" | "spot" | "profile";
   busy: string | null;
   layers: LayerVisibility;
-  tinStyle: { mode: "ramp" | "flat" | "wire"; opacity: number };
+  tinStyle: { mode: "ramp" | "flat"; opacity: number };
+  /** the element the user has picked, with its editable properties (see ui/selection.ts) */
+  selection: import("./ui/selection").Selection | null;
 }
 
 export interface LayerVisibility {
   points: boolean; pointLabels: boolean;
   featureLines: boolean; boundary: boolean; voids: boolean; digitisedContours: boolean;
-  tin: boolean; tinHull: boolean; tinIssues: boolean; tinRejected: boolean;
+  tin: boolean; tinEdges: boolean; tinHull: boolean; tinIssues: boolean; tinRejected: boolean;
   contours: boolean; contourLabels: boolean;
   alignment: boolean; chainageLabels: boolean; keyPoints: boolean;
   sections: boolean;
@@ -33,7 +35,7 @@ export interface LayerVisibility {
 export const DEFAULT_LAYERS: LayerVisibility = {
   points: true, pointLabels: false,
   featureLines: true, boundary: true, voids: true, digitisedContours: true,
-  tin: true, tinHull: false, tinIssues: false, tinRejected: false,
+  tin: true, tinEdges: false, tinHull: false, tinIssues: false, tinRejected: false,
   contours: true, contourLabels: true,
   alignment: true, chainageLabels: true, keyPoints: true,
   sections: true,
@@ -60,6 +62,7 @@ class Store {
     busy: null,
     layers: { ...DEFAULT_LAYERS },
     tinStyle: { mode: "ramp", opacity: 1 },
+    selection: null,
   };
   private listeners: { [K in keyof AppState]?: Listener<K>[] } = {};
   private events = new Map<string, ((payload?: any) => void)[]>();

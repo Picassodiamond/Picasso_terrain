@@ -36,6 +36,9 @@
   <a href="#sections">Profile and cross-sections</a>
   <a href="#export">Export</a>
   <a href="#large">Large surveys</a>
+  <a href="#editlines">Editing a constraint line</a>
+  <a href="#properties">Selecting and editing properties</a>
+  <a href="#mesh">Looking at the triangulation</a>
   <a href="#keys">Keyboard shortcuts</a>
 </aside>
 
@@ -142,6 +145,64 @@
 <h2 id="large">Large surveys</h2>
 <p>Surveys of several hundred thousand points work: points stream to the map in a compact binary form, the terrain is drawn in tiles and the TIN is cached on the server. Builds on large surveys queue behind other jobs; the panel shows your position and an estimate. If a build would not fit in the server's memory it is refused with a message instead of failing halfway.</p>
 
+<h2 id="editlines">Editing a constraint line</h2>
+<p>A breakline, boundary or void can be corrected after it is drawn or imported &mdash; you do not have
+to delete it and draw it again. In the <b>Data</b> panel, press <b>Edit</b> on its row in the
+<i>Constraint lines</i> table. The line is picked out on the map with a handle on every vertex, and a
+table of its vertices opens below.</p>
+<table>
+  <tr><th>To</th><th>Do</th></tr>
+  <tr><td>Move a vertex roughly</td><td>Drag its handle on the map. The pointer shows <b>move</b> over a handle you can pick up.</td></tr>
+  <tr><td>Set a vertex exactly</td><td>Type the <b>Easting</b> and <b>Northing</b> in the table. This is the one to use for surveyed coordinates &mdash; the map is for judgement, the table is for numbers.</td></tr>
+  <tr><td>Insert a vertex</td><td><b>+</b> on a row puts a new one halfway to the next.</td></tr>
+  <tr><td>Remove a vertex</td><td>The cross on its row. A line keeps two vertices, a boundary or void keeps three corners.</td></tr>
+  <tr><td>Keep or discard</td><td><b>Save line</b> writes it; <b>Cancel</b> leaves the stored line untouched. Nothing is written until you save.</td></tr>
+</table>
+<p>A <b>boundary</b> or a <b>void</b> encloses an area, so its ring is closed for you: the table shows
+the corners once, and moving the first corner moves the repeated last one with it.</p>
+<p>There is no level to type. Constraint lines are <b>plan geometry</b>: the level of a vertex comes
+from the survey surface when the TIN is built. A breakline imported with surveyed levels keeps them
+on every vertex you do not move.</p>
+<div class="note"><b>The terrain is a snapshot.</b> Editing a constraint changes what the <i>next</i>
+TIN build sees. The runs you already have &mdash; and any design pinned to them &mdash; keep the old
+line until you build the TIN again.</div>
+
+<h2 id="properties">Selecting something and editing its properties</h2>
+<p>Click an element and the layer panel switches to its <b>Properties</b> tab. It works the same way
+everywhere in the software: whatever you have selected, its name is at the top, its values are
+listed with their units, and the ones you may change are boxes you can type into. The <b>Layers</b>
+tab beside it is the one you already know &mdash; the two share one panel so the map stays clear.</p>
+<table>
+  <tr><th>Select</th><th>You get</th></tr>
+  <tr><td>A survey point</td><td>Easting, Northing, RL, point id, remark and layer, with <b>Zoom here</b>. Survey is a record, so these are read-only.</td></tr>
+  <tr><td>A vertex of a constraint line</td><td>Easting and Northing, editable, with <b>Remove</b>. Available while the line is being edited.</td></tr>
+  <tr><td>An IP (road design)</td><td>Easting, Northing, radius <b>R</b>, transition <b>Ls</b> and the label.</td></tr>
+  <tr><td>A wall, drain or culvert</td><td>Type, side, from and to chainage, the parameters that type needs, and the length and quantities it works out to.</td></tr>
+</table>
+<p><b>Apply</b> writes your change; <b>Revert</b> puts the boxes back. Nothing is written just by
+selecting. Where a change makes something else out of date the message says so &mdash; <i>save the
+alignment to keep it</i>, <i>rebuild the TIN to use it</i> &mdash; so you are never left with a
+drawing that quietly disagrees with the data.</p>
+
+<h2 id="mesh">Looking at the triangulation</h2>
+<p>The <b>TIN surface</b> layer shows the ground shaded by elevation. To inspect the triangulation
+itself &mdash; the triangles the engine actually built &mdash; switch on <b>Triangle edges</b> in the
+Terrain group of the layer panel. The count beside it is the number of triangles in the run.</p>
+<figure><img src="img/terrain-tin-edges.jpg" alt="The triangulation drawn over the shaded surface"><figcaption>Triangle edges over the shaded surface. Switch the surface off to read the mesh against the base map.</figcaption></figure>
+<p>It is worth looking at when you are checking a model:</p>
+<ul>
+  <li><b>Breaklines</b> should appear as continuous chains of triangle sides. If a stream or a road edge
+  is crossed by triangles rather than followed by them, the line was not honoured &mdash; check that it
+  is a <i>breakline</i> and not a digitised contour.</li>
+  <li><b>Long thin triangles</b> along the edge of the survey, or in gaps between strings of points, are
+  where the surface is being guessed. Those are the places to add survey or a boundary.</li>
+  <li><b>The hull</b>: switch on <b>TIN outline</b> to see how far the model claims to reach.</li>
+</ul>
+<p>The edges are drawn a little above the faces so they read over the shading, and they stay visible
+when the surface itself is switched off &mdash; the mesh alone over the base map is often the clearest
+way to see the structure. The triangulation is built from the run as it loads, so the first time you
+switch it on the surface is re-read; after that the switch is instant.</p>
+
 <h2 id="keys">Keyboard shortcuts</h2>
 <p>Reviewing a line means stepping through it station by station, so the cross-section pane is driven
 from the keyboard. Press <kbd>?</kbd> anywhere to see the list for the screen you are on.</p>
@@ -159,7 +220,8 @@ from the keyboard. Press <kbd>?</kbd> anywhere to see the list for the screen yo
   <tr><td><kbd>?</kbd></td><td>The shortcut card, built from whatever is active on the screen.</td></tr>
 </table>
 <p>Nothing fires while the cursor is in a text box, so you can type a chainage or a level without the
-view jumping about.</p>
+view jumping about. On the map the pointer is a <b>grab</b> hand that closes while you drag, and turns
+into a crosshair when a drawing tool is in hand.</p>
 
 <footer>Picasso LandMesh help · updated 2026-09-21</footer>
 </main>

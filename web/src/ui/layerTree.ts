@@ -2,6 +2,7 @@
 import { api } from "../api";
 import { DEFAULT_LAYERS, store, type LayerVisibility } from "../state";
 import { el } from "./dom";
+import { mountInspector } from "./selection";
 import type { Workspace } from "./workspace";
 
 type Key = keyof LayerVisibility;
@@ -11,6 +12,11 @@ interface Node { label: string; key?: Key; children?: Node[]; count?: () => stri
 export class LayerTree {
   private root: HTMLElement;
   private body: HTMLElement;
+  /** the Properties pane: the one inspector, embedded here rather than floating over the map */
+  private props: HTMLElement;
+  private tabs: HTMLElement;
+  private tab: "layers" | "properties" = "layers";
+  private unmountInspector: () => void;
   private collapsed = false;
   private open: Record<string, boolean> = { "Survey data": true, Terrain: true, Contours: true, Alignment: true, Sections: true, Team: false };
   private hullLoaded = false;
@@ -19,16 +25,45 @@ export class LayerTree {
 
   constructor(private ws: Workspace, host: HTMLElement) {
     this.body = el("div", { class: "layer-body" });
+    this.props = el("div", { class: "layer-props", style: "display:none" });
+    this.tabs = el("div", { class: "layer-tabs" });
     const toggle = el("button", { class: "layer-collapse", title: "Collapse", onClick: () => { this.collapsed = !this.collapsed; this.root.classList.toggle("collapsed", this.collapsed); toggle.textContent = this.collapsed ? "☰" : "–"; } }, "–");
     this.root = el("div", { class: "layer-panel" },
-      el("div", { class: "layer-head", onClick: (e: Event) => { if ((e.target as HTMLElement).tagName !== "BUTTON") toggle.click(); } }, el("span", {}, "Layers"), el("span", { class: "spacer" }), toggle),
-      this.body);
+      el("div", { class: "layer-head", onClick: (e: Event) => { if ((e.target as HTMLElement).tagName !== "BUTTON") toggle.click(); } }, el("span", {}, "Layers & properties"), el("span", { class: "spacer" }), toggle),
+      this.tabs, this.body, this.props);
     host.appendChild(this.root);
+    this.unmountInspector = mountInspector(this.props, { embedded: true });
+    // a new selection brings its tab forward: the properties are what you just asked to see
+    store.on("selection", (sel) => { this.renderTabs(); if (sel) this.showTab("properties"); });
+    this.renderTabs();
     for (const k of ["tinRuns", "currentRun", "contourSets", "visibleContourSets", "alignments", "currentAlignment", "sectionSets", "currentSectionSet", "layers", "tinStyle"] as const) {
       store.on(k, () => this.render());
     }
     store.subscribe("refresh:comments", () => this.render());
     this.render();
+  }
+
+  private showTab(t: "layers" | "properties"): void {
+    this.tab = t;
+    this.body.style.display = t === "layers" ? "" : "none";
+    this.props.style.display = t === "properties" ? "" : "none";
+    if (this.collapsed) { this.collapsed = false; this.root.classList.remove("collapsed"); }
+    this.renderTabs();
+  }
+
+  private renderTabs(): void {
+    const sel = store.get("selection");
+    this.tabs.innerHTML = "";
+    for (const [key, label] of [["layers", "Layers"], ["properties", sel ? `Properties: ${sel.kind}` : "Properties"]] as const) {
+      this.tabs.appendChild(el("button", { class: `layer-tab${this.tab === key ? " active" : ""}`,
+        onClick: () => this.showTab(key as "layers" | "properties") }, label));
+    }
+  }
+
+  /** Take the panel down with the workspace. */
+  destroy(): void {
+    this.unmountInspector();
+    this.root.remove();
   }
 
   private set(key: Key, on: boolean): void {
@@ -56,6 +91,8 @@ export class LayerTree {
       ] },
       { label: "Terrain", children: [
         { label: runInfo ? `TIN surface (run ${runInfo.id})` : "TIN surface", key: "tin", count: () => (runInfo ? `${runInfo.n_triangles} tri` : "none"), extra: () => this.tinStyleControls() },
+        { label: "Triangle edges", key: "tinEdges", count: () => (runInfo ? `${runInfo.n_triangles} tri` : null),
+          onToggle: (on) => this.ensureEdges(on) },
         { label: "TIN outline", key: "tinHull", onToggle: (on) => void this.ensureHull(on) },
         { label: "Issue markers", key: "tinIssues", count: () => (runInfo ? `${runInfo.issues_count}` : null), onToggle: (on) => void this.ensureIssues(on) },
         { label: "Rejected triangles", key: "tinRejected", count: () => (runInfo?.stats?.raw_triangles ? `${runInfo.stats.raw_triangles - runInfo.n_triangles}` : null), onToggle: (on) => void this.ensureRejected(on) },
@@ -92,12 +129,19 @@ export class LayerTree {
 
   private tinStyleControls(): HTMLElement {
     const st = store.get("tinStyle");
-    const mode = el("select", { class: "mini" }, ...[["ramp", "elevation"], ["flat", "shaded"], ["wire", "wire"]].map(([v, l]) => el("option", { value: v, selected: v === st.mode }, l)));
+    const mode = el("select", { class: "mini" }, ...[["ramp", "elevation"], ["flat", "shaded"]].map(([v, l]) => el("option", { value: v, selected: v === st.mode }, l)));
     const op = el("input", { type: "range", min: "0.1", max: "1", step: "0.05", value: String(st.opacity), class: "mini", title: "opacity" });
     const apply = () => { store.set("tinStyle", { mode: mode.value as any, opacity: Number(op.value) }); this.ws.restyleTin(); };
     mode.addEventListener("change", apply);
     op.addEventListener("change", apply);
     return el("span", { class: "layer-extra" }, mode, op);
+  }
+
+  /** The triangulation is built from the mesh as it loads, so switching it on the first time
+   *  reloads the run; switching it off (or on again afterwards) is just a visibility change. */
+  private ensureEdges(on: boolean): void {
+    if (on && !this.ws.layers.tinWires.length && store.get("currentRun") !== null) { this.ws.restyleTin(); return; }
+    this.ws.layers.setVisibility(store.get("layers"));
   }
 
   private async ensureHull(on: boolean): Promise<void> {

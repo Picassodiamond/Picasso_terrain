@@ -142,6 +142,33 @@ await step("structures: suggestions", async () => {
   await page.waitForSelector('button:has-text("PVI table CSV")');
 });
 
+await step("structures appear on the cross-section", async () => {
+  // find a chainage that actually has a wall or a drain, then look for it in the section pane
+  const items = await page.evaluate(async () => {
+    const ws = window.__plm;
+    const all = (ws.data.structures?.structures) || [];
+    if (!all.length) return null;
+    const mid = (Number(all[0].from) + Number(all[0].to)) / 2;
+    await ws.showSection(mid);
+    await new Promise((r) => setTimeout(r, 1500));
+    const svg = document.querySelector(".road-section-body svg");
+    return {
+      chainage: ws.station,
+      stored: all.length,
+      walls: svg ? svg.querySelectorAll("path.structure-wall").length : -1,
+      foundations: svg ? svg.querySelectorAll("path.structure-foundation").length : -1,
+      drains: svg ? svg.querySelectorAll("path.structure-drain").length : -1,
+      labels: svg ? Array.from(svg.querySelectorAll("text.structure-label")).map((t) => t.textContent) : [],
+    };
+  });
+  if (!items) { console.log("\n    no structures stored - skipped"); return; }
+  if (items.walls + items.drains < 1) {
+    throw new Error(`nothing drawn on the section at CH ${items.chainage} (${items.stored} structures stored)`);
+  }
+  console.log(`\n    CH ${items.chainage}: ${items.walls} wall(s), ${items.foundations} foundation(s), ${items.drains} drain(s) - ${items.labels.join(", ")}`);
+  await page.screenshot({ path: `${outDir}road-section-structures.png`, animations: "disabled" });
+});
+
 await step("output: drawing sheets, preview and settings", async () => {
   await stage("Output");
   await page.waitForSelector(".sheet-row .chip", { timeout: 90000 });

@@ -1,6 +1,7 @@
 import { api, ApiError } from "../../api";
 import { store, toast } from "../../state";
-import { button, download, el, field, fmt, select } from "../dom";
+import { clearSelection, ro, selectElement } from "../selection";
+import { button, download, el, field, fmt, numberInput, select } from "../dom";
 import type { Workspace } from "../workspace";
 
 export function renderDataPanel(ws: Workspace, host: HTMLElement): void {
@@ -87,7 +88,7 @@ export function renderDataPanel(ws: Workspace, host: HTMLElement): void {
     consEl.innerHTML = "";
     const fc = await api.data.lines(pid);
     const feats = fc.features as any[];
-    if (!feats.length) { consEl.appendChild(el("p", { class: "muted" }, "No constraint lines yet. Draw them, import them, or let the TIN build detect the survey limit automatically.")); return; }
+    if (!feats.length) { consEl.appendChild(el("p", { class: "muted" }, "No constraint lines yet. Draw them, import them, or let the TIN build detect the survey limit automatically.")); consEl.appendChild(editEl); return; }
     const tbl = el("table", { class: "data" }, el("tr", {}, el("th", {}, "kind"), el("th", {}, "source"), el("th", {}, "name"), el("th", {}, "pts"), el("th")));
     for (const f of feats) {
       const p = f.properties;
@@ -102,15 +103,169 @@ export function renderDataPanel(ws: Workspace, host: HTMLElement): void {
         const xs = coords.map((c) => c[0]), ys = coords.map((c) => c[1]);
         store.emit("map:flyTo", [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
       } }, p.name ? String(p.name).slice(0, 40) : `#${p.fid}`);
-      tbl.appendChild(el("tr", {}, el("td", {}, kindSel), el("td", { class: "muted", title: p.source }, p.source === "auto" ? "auto" : p.source === "accepted" ? "reviewed" : p.source === "drawn" ? "drawn" : "import"),
+      const editing = editor?.fid === p.fid;
+      tbl.appendChild(el("tr", { class: editing ? "selected" : "" }, el("td", {}, kindSel),
+        el("td", { class: "muted", title: p.source }, p.source === "auto" ? "auto" : p.source === "accepted" ? "reviewed" : p.source === "drawn" ? "drawn" : "import"),
         el("td", {}, fly), el("td", {}, String(coords.length)),
-        el("td", {}, button("✕", async () => { await api.data.deleteLines(pid, { fids: String(p.fid) }); await ws.refreshLines(); renderConstraints(); renderSummary(); }, "btn small danger"))));
+        el("td", {}, el("div", { class: "btn-row" },
+          button(editing ? "Editing" : "Edit", () => (editing ? stopEditing() : startEditing(p.fid, p.kind, coords)), editing ? "btn small active" : "btn small"),
+          button("✕", async () => { if (editing) stopEditing(); await api.data.deleteLines(pid, { fids: String(p.fid) }); await ws.refreshLines(); renderConstraints(); renderSummary(); }, "btn small danger")))));
     }
     const autoCount = feats.filter((f) => f.properties.source === "auto").length;
+    // editEl is re-appended below: renderConstraints() clears consEl, which detaches it
     consEl.append(el("div", { class: "card" }, tbl,
       el("p", { class: "hint" }, "Dashed lines on the map are automatic suggestions in use. Change a kind, delete a line, or draw a replacement; the next TIN build uses exactly this list."),
       autoCount ? el("div", { class: "btn-row" }, button(`Remove ${autoCount} automatic`, async () => { await api.constraints.deleteAuto(pid); await ws.refreshLines(); renderConstraints(); renderSummary(); }, "btn small")) : null));
+    consEl.appendChild(editEl);
   }
+  // ---------------------------------------------------------------- vertex editor
+  /** The line being edited, as a working copy: nothing is written until Save. */
+  let editor: { fid: number; kind: string; coords: number[][]; selected: number } | null = null;
+  const editEl = el("div");
+  consEl.appendChild(editEl);
+
+  const isRing = (kind: string) => kind === "boundary" || kind === "void";
+
+  function drawEditor(): void {
+    if (editor) ws.layers.setEditLine(editor.coords, editor.kind, ws.zAt, editor.selected);
+  }
+
+  function startEditing(fid: number, kind: string, coords: number[][]): void {
+    editor = { fid, kind, coords: coords.map((c) => [c[0], c[1], c[2] ?? 0]), selected: -1 };
+    ws.setTool("none");
+    ws.interaction.dragEnabled = true;
+    ws.toolHandlers = {
+      hint: "Drag a vertex to move it, or type exact coordinates in the table.",
+      onDragVertex: (i, pt, phase) => {
+        const e = editor;
+        if (!e?.coords[i]) return;
+        e.coords[i][0] = Number(pt.x.toFixed(3));
+        e.coords[i][1] = Number(pt.y.toFixed(3));
+        // a closed ring repeats its first corner last: move both or the ring tears open
+        if (isRing(e.kind) && i === 0) e.coords[e.coords.length - 1] = [...e.coords[0]];
+        e.selected = i;
+        drawEditor();
+        selectVertex(i);
+        if (phase === "end") renderEditor();
+      },
+    };
+    drawEditor();
+    renderConstraints();
+    renderEditor();
+  }
+
+  /** The picked vertex, with its plan coordinates as editable properties. */
+  function selectVertex(i: number): void {
+    const e = editor;
+    if (!e?.coords[i]) return;
+    const v = e.coords[i];
+    const ring = isRing(e.kind);
+    selectElement({
+      kind: "vertex", id: `${e.fid}:${i}`, label: `Vertex ${i + 1} of line #${e.fid}`,
+      subtitle: `${e.kind === "feature" ? "breakline" : e.kind} \· plan geometry, the level comes from the survey`,
+      fields: [
+        { key: "x", label: "Easting", value: Number(v[0].toFixed(3)), type: "number", unit: "m", step: 0.001 },
+        { key: "y", label: "Northing", value: Number(v[1].toFixed(3)), type: "number", unit: "m", step: 0.001 },
+      ],
+      apply: (vals) => {
+        const x = Number(vals.x), y = Number(vals.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("Easting and Northing must be numbers");
+        v[0] = x; v[1] = y;
+        if (ring && i === 0) e.coords[e.coords.length - 1] = [...e.coords[0]];
+        drawEditor();
+        renderEditor();
+        selectVertex(i);
+        return `Vertex ${i + 1} moved \— Save line to keep it`;
+      },
+      actions: [{
+        label: "Remove", danger: true, run: () => {
+          const min = ring ? 4 : 2;
+          if (e.coords.length <= min) { toast(ring ? "A boundary or void needs three corners" : "A line needs two vertices", "error"); return; }
+          e.coords.splice(i, 1);
+          if (ring && i === 0) e.coords[e.coords.length - 1] = [...e.coords[0]];
+          e.selected = -1;
+          clearSelection();
+          drawEditor(); renderEditor();
+        },
+      }],
+    });
+  }
+
+  function stopEditing(): void {
+    editor = null;
+    clearSelection();
+    ws.toolHandlers = {};
+    ws.interaction.dragEnabled = false;
+    ws.layers.setEditLine(null, "", ws.zAt);
+    renderConstraints();
+    renderEditor();
+  }
+
+  function renderEditor(): void {
+    editEl.innerHTML = "";
+    const e = editor;
+    if (!e) return;
+    const ring = isRing(e.kind);
+    const rows = ring && e.coords.length > 2 ? e.coords.length - 1 : e.coords.length;
+    const tbl = el("table", { class: "data" }, el("tr", {}, el("th", {}, "#"), el("th", {}, "Easting"), el("th", {}, "Northing"), el("th")));
+    for (let i = 0; i < rows; i++) {
+      const v = e.coords[i];
+      const num = (val: number, set: (x: number) => void) => {
+        const inp = numberInput(Number(val.toFixed(3)), { class: "num" });
+        inp.addEventListener("change", () => {
+          const x = Number(inp.value);
+          if (!Number.isFinite(x)) { inp.value = val.toFixed(3); return; }
+          set(x);
+          if (ring && i === 0) e.coords[e.coords.length - 1] = [...e.coords[0]];
+          drawEditor();
+        });
+        inp.addEventListener("focus", () => { e.selected = i; drawEditor(); selectVertex(i); });
+        return inp;
+      };
+      tbl.appendChild(el("tr", { class: i === e.selected ? "selected" : "" },
+        el("td", { class: "mono" }, String(i + 1)),
+        el("td", {}, num(v[0], (x) => (v[0] = x))),
+        el("td", {}, num(v[1], (x) => (v[1] = x))),
+        el("td", {}, el("div", { class: "btn-row" },
+          button("+", () => {
+            const nxt = e.coords[i + 1] ?? e.coords[0];
+            e.coords.splice(i + 1, 0, [(v[0] + nxt[0]) / 2, (v[1] + nxt[1]) / 2, ((v[2] ?? 0) + (nxt[2] ?? 0)) / 2]);
+            e.selected = i + 1;
+            drawEditor(); renderEditor();
+          }, "btn small"),
+          button("✕", () => {
+            const min = ring ? 4 : 2;            // a ring also carries its repeated last vertex
+            if (e.coords.length <= min) { toast(ring ? "A boundary or void needs three corners" : "A line needs two vertices", "error"); return; }
+            e.coords.splice(i, 1);
+            if (ring && i === 0) e.coords[e.coords.length - 1] = [...e.coords[0]];
+            e.selected = -1;
+            drawEditor(); renderEditor();
+          }, "btn small danger")))));
+    }
+    editEl.appendChild(el("div", { class: "card" },
+      el("h4", {}, `Vertices of #${e.fid}`),
+      el("p", { class: "hint" }, ring
+        ? "A boundary or a void encloses an area: the ring is closed for you, so the first corner is also the last."
+        : "Drag a vertex on the map, or type the exact Easting and Northing. + inserts a vertex after this one."),
+      el("div", { style: "max-height:260px;overflow:auto" }, tbl),
+      el("div", { class: "btn-row" },
+        button("Save line", async () => {
+          try {
+            const res = await api.data.editLine(pid, e.fid, { coords: e.coords.map((c) => [c[0], c[1]]) });
+            toast(`Line #${e.fid} saved with ${res.line.n_vertices} vertices — rebuild the TIN to use it`, "ok");
+            stopEditing();
+            await ws.refreshLines();
+            renderConstraints();
+            renderSummary();
+          } catch (err) { toast(err instanceof ApiError ? err.detail : String(err), "error"); }
+        }, "btn primary"),
+        button("Cancel", () => stopEditing(), "btn")),
+      el("p", { class: "hint" }, "Constraint lines are plan geometry: the level of a vertex comes from the survey surface, so there is no RL to type. "
+        + "A breakline imported with surveyed levels keeps them on every vertex you do not move."),
+      el("p", { class: "hint" }, "The terrain is a snapshot: the TIN runs you already have keep the old line. Build the TIN again to use the edit."),
+    ));
+  }
+
   void renderConstraints();
   store.subscribe("refresh:lines", () => void renderConstraints());
 

@@ -1,6 +1,6 @@
 /** Cross-section chart (D3, SVG): offset from centre line vs RL. */
 import * as d3 from "d3";
-import type { Section } from "../api";
+import type { Section, SectionStructure } from "../api";
 import { fmtChainage } from "../ui/dom";
 
 export interface SectionChartOptions {
@@ -8,6 +8,8 @@ export interface SectionChartOptions {
   onHover?: (p: { offset: number; z: number; x: number; y: number } | null) => void;
   formationLevel?: number | null;  // optional horizontal design level line
   design?: { offset: number; z: number }[];   // corridor design polyline (daylight to daylight)
+  /** walls and drains that cover this chainage, already placed in section coordinates */
+  structures?: SectionStructure[];
   title?: string;
 }
 
@@ -26,9 +28,13 @@ export function renderSection(container: HTMLElement, s: Section, opts: SectionC
     svg.append("text").attr("x", width / 2).attr("y", height / 2).attr("text-anchor", "middle").attr("fill", "#94a3b8").text("Section outside the TIN");
     return;
   }
-  const offMin = Math.min(-s.left, ...design.map((p) => p.offset)), offMax = Math.max(s.right, ...design.map((p) => p.offset));
+  const structures = opts.structures || [];
+  const structPts = structures.flatMap((t) => [...t.points, ...(t.foundation || [])]);
+  const offMin = Math.min(-s.left, ...design.map((p) => p.offset), ...structPts.map((p) => p[0]));
+  const offMax = Math.max(s.right, ...design.map((p) => p.offset), ...structPts.map((p) => p[0]));
   const x = d3.scaleLinear().domain([offMin, offMax]).range([0, w]);
-  const zmin = Math.min(d3.min(pts, (p) => p.z)!, ...design.map((p) => p.z)), zmax = Math.max(d3.max(pts, (p) => p.z)!, ...design.map((p) => p.z));
+  const zmin = Math.min(d3.min(pts, (p) => p.z)!, ...design.map((p) => p.z), ...structPts.map((p) => p[1]));
+  const zmax = Math.max(d3.max(pts, (p) => p.z)!, ...design.map((p) => p.z), ...structPts.map((p) => p[1]));
   const pxPerM = w / (offMax - offMin);
   const zSpan = Math.max(h / (pxPerM * opts.vScale), (zmax - zmin) * 1.2, 0.5);
   const zMid = (zmin + zmax) / 2;
@@ -66,6 +72,32 @@ export function renderSection(container: HTMLElement, s: Section, opts: SectionC
     for (const p of [design[0], design[design.length - 1]]) g.append("rect").attr("class", "daylight").attr("x", x(p.offset) - 3).attr("y", y(p.z) - 3).attr("width", 6).attr("height", 6);
     const c0 = design.reduce((a, b) => (Math.abs(b.offset) < Math.abs(a.offset) ? b : a));
     g.append("text").attr("class", "tip design").attr("x", x(c0.offset) + 4).attr("y", y(c0.z) - 6).text(`design ${c0.z.toFixed(2)}`);
+  }
+  // structures: wall bodies (hatched, with a dashed foundation) and drain channels, exactly where
+  // the drawing sheets put them - both come from section_structures() on the server
+  if (structures.length) {
+    const defs = svg.append("defs");
+    defs.append("pattern").attr("id", "plm-wall-hatch").attr("patternUnits", "userSpaceOnUse").attr("width", 6).attr("height", 6)
+      .attr("patternTransform", "rotate(45)")
+      .append("line").attr("x1", 0).attr("y1", 0).attr("x2", 0).attr("y2", 6).attr("class", "wall-hatch-line");
+    const sg = g.append("g").attr("class", "structures");
+    for (const t of structures) {
+      const d = t.points.map((p, i) => `${i ? "L" : "M"}${x(p[0])},${y(p[1])}`).join("") + (t.closed ? "Z" : "");
+      if (t.group === "wall") {
+        sg.append("path").attr("class", "structure-wall").attr("d", d);
+        if (t.foundation) {
+          sg.append("path").attr("class", "structure-foundation")
+            .attr("d", t.foundation.map((p, i) => `${i ? "L" : "M"}${x(p[0])},${y(p[1])}`).join("") + "Z");
+        }
+      } else {
+        sg.append("path").attr("class", "structure-drain").attr("d", d);
+      }
+      sg.append("text").attr("class", `structure-label ${t.group}`)
+        .attr("x", x(t.label_at[0])).attr("y", y(t.label_at[1]))
+        .attr("text-anchor", t.label_align === "center" ? "middle" : t.label_align === "left" ? "start" : "end")
+        .attr("dominant-baseline", t.label_baseline === "middle" ? "middle" : "hanging")
+        .text(t.label);
+    }
   }
   // RL labels at ends and centre
   const label = (p: { offset: number; z: number }, dx: number, anchor: string) =>

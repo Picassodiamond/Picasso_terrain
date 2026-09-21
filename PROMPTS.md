@@ -333,3 +333,139 @@ viewer gained Home / End, zoom, fit and DXF. A real bug turned up while testing:
 printed the chainage in the header *before* clamping `this.station`, so the header always showed the
 previous station - the button pair had been doing this all along. `web/e2e/keys_check.mjs` covers it
 all in a browser, including that typing in a box must not move the view.
+
+### 41. "1.can we have different mouse icons while pan , while moving alingment ndoes , (both vertical and horizontal ) , we also might need tools to select move item , delete node , pan , zoom etc ... 2 structures are not visible in cross section"
+**Interpretation.** Two separate things. (1) The pointer should say what it is about to do: a grab
+hand while panning, a move cursor over a draggable IP on the plan and over a draggable PVI on the
+profile, a crosshair while drawing; and there should be an explicit tool palette - select/move,
+delete node, pan, zoom - so the same actions are reachable without knowing the modifier keys.
+(2) A defect: walls, drains and culverts are drawn on the sheet cross-sections but do not appear in
+the cross-section pane in the browser. Fix the defect first, since it is wrong behaviour rather than
+a missing convenience.
+**Outcome.** (2) The placement of a wall or drain on a section lived inside the sheet renderer, so
+only the DXF and the SVG could draw it. Moved to `plm.design.structures.section_structures()`, which
+returns the body polygon, the dashed foundation, the channel and the label position in section
+coordinates; the sheet renderer and the new browser drawing both call it, so the screen and the
+drawing cannot disagree. `/corridor/section` now returns `structures`, and `charts/section.ts` draws
+them (hatched wall, dashed foundation, drain channel, labels) with the chart extent widened so a
+foundation is not cut off. (1) `PlanView` gained a tool - select / move, pan, zoom, delete node -
+with a palette above the plan and the keys S P Z D, and the pointer now names the action: `move`
+over a draggable node, `grab` / `grabbing` while panning, `zoom-in` under the zoom tool,
+`not-allowed` when delete is not over a node. Zoom clicks in, Alt-clicks out and drags a box.
+Deleting refuses below two IPs and only on the Alignment stage. PVI handles on the profile show
+`move`, and `ns-resize` for the first and last, which are pinned in chainage. The 3-D map uses the
+same grab pair. `web/e2e/tools_check.mjs` asserts every cursor and every tool; the structures fix is
+asserted in `road_check.mjs`.
+
+### 42. "1.  could not move nodes in alignment , 2 when nodes are moved the cross section is not updated , 3 the retaining wall was not shown correctly it seem to be randomly placed at center of cross section"
+**Interpretation.** Three defects reported from real use of what was just built. (1) IP nodes cannot
+be dragged on the plan - a regression from the tool work, and one the new check claimed to cover, so
+the check is wrong as well as the code. (2) Moving an IP changes the centre line, but the
+cross-section pane keeps showing the old one. (3) The retaining wall is drawn in the wrong place on
+the cross-section, near the centre rather than at the daylight - most likely a falsy-value fallback
+in the new placement code. Reproduce each one before changing anything.
+**Outcome.** (3) Real bug, found in the data: the wall was anchored at `hinge_z - recorded_height`,
+so a 4.5 m wall recorded against a 24.7 m fill hung in mid-air near the centre of a 120 m section.
+Walls now stand on the ground - retaining and breast walls with the face on the hinge spanning down
+to it, toe and catch walls at the daylight point - and the two that exist to span hinge-to-ground are
+drawn at the drop the section needs, with the recorded height named beside it when they disagree
+(`Retaining wall 24.7 m (recorded 4.5 m)`), because that disagreement is a design problem worth
+seeing. A `_num()` helper replaced `or` fallbacks, which had been treating a perfectly good offset of
+0.0 as missing. (2) `previewHorizontal()` updated the plan, profile and stage but never the section;
+it does now, and while the alignment is unsaved the section falls back to live ground rather than
+drawing the stale corridor at the new chainage. That first attempt fired a *heavy* ground request per
+preview and starved the save that followed it - `road_check` went intermittently red - so the refresh
+is debounced and only the newest reply may draw. (1) Could not reproduce a plain break: dragging
+worked from a cold load in the browser. The likely cause is the tool palette itself - a stray `p`,
+`z` or `d` armed another tool invisibly. Made that recoverable rather than argued about: the plan's
+status line now names the tool in hand, `Esc` returns to Select (it used to leave the workspace),
+and deleting a node asks first. `tools_check.mjs` gained three steps covering all of this, and
+`keys_check.mjs` now generates its own section set instead of relying on one another check had
+deleted.
+
+### 43. "in terrain workspace , make possible to view the real triangle generated as a layer , currently it cannot be viewed ,"
+**Interpretation.** The TIN is shown as a shaded surface; the triangulation itself - the edges of the
+triangles the engine actually built - cannot be seen. Add it as a layer that can be switched on and
+off like the others, so the engineer can inspect the mesh: where the constraint lines forced edges,
+where long thin triangles sit, how the hull closed. Draw the real triangles from the run, not a
+decorative approximation.
+**Outcome.** There *was* a `wire` option in the surface-style select, but it drew the wireframe on
+top of the opaque surface at the same depth, so the edges z-fought with the triangles they belong to
+and never appeared - which is why it read as "cannot be viewed". The triangulation is now a layer in
+its own right, **Triangle edges**, under Terrain with the run's triangle count beside it: one `LINES`
+primitive per mesh part, three sides per triangle, the vertices lifted 0.25 m in the project's
+vertical axis so they draw cleanly over the faces, and its own visibility so the mesh stays on when
+the shaded surface is switched off - the mesh alone over the base map is the clearest inspection
+view. It is built only when the layer is on (index memory), so the first switch-on re-reads the run
+and afterwards it is a visibility flag. The broken `wire` style was removed rather than left to
+mislead. `web/e2e/tin_edges_check.mjs` checks the edge count against the run (4026 triangles ->
+12078 lines), that the edges survive the surface being hidden, and that `wire` is gone; the terrain
+help page gained a section on what to look for in a mesh - breaklines appearing as chains of triangle
+sides, long thin triangles where the surface is being guessed.
+
+### 44. "we should be able to slect and move nodes of boundary , void and breaklines also enter their precise points"
+**Interpretation.** Constraint lines can be drawn and deleted but never edited. The ask is the same
+editing the road alignment already has, applied to breaklines, boundaries and voids: pick a line,
+see its vertices as handles, drag them, and - because survey work is numeric - type exact
+coordinates into a table instead of dragging. Deleting and inserting a vertex belongs with it, since
+a line whose nodes can be moved but not added or removed is half an editor. The terrain is
+read-only to designs, so editing a constraint must make the TIN that used it plainly out of date.
+**Outcome.** Backend: `PATCH /lines/{fid}` now takes a JSON body whose `coords` replace the vertices
+(the old query-parameter form still works), `ProjectStore.update_line` rewrites the geometry and
+recomputes `closed`, `n_vertices` and the layer extent, and the route enforces the shape rules - two
+vertices for a line, three distinct corners for a boundary or void, whose ring it closes itself.
+Browser: an **Edit** button on every row of the constraint table puts a handle on each vertex
+(new `vertex` pick type, dragged through `Interaction.onDragVertex`) and opens a table of Easting /
+Northing / RL for exact values, with `+` to insert and a cross to remove. A closed ring shows its
+corners once and carries the repeated last vertex with the first, on the map and in the table.
+Nothing is written until Save, and both the toast and the panel say the thing that matters here: the
+terrain is a snapshot, so the TIN has to be built again before the edit is used. 12 backend tests in
+`tests/test_line_edit.py` and `web/e2e/line_edit_check.mjs` end to end. One bug found while testing:
+the editor card lived inside the container `renderConstraints()` clears, so it was being detached the
+moment the table redrew.
+
+### 45. "1.i think boundary, void , break  lines can be 2d because there is no use of elevation info , lets do it that way other wise it is difficult to add pionts . 2. Let us have tools to select or move the points , also let us have properties of selected point where we can enter the values . make this a universal feature of the software , eg if wall is selected its properties is shown which can be edited , similarly other elements , write it in claude.md as design"
+**Interpretation.** Two things. (1) Treat constraint lines as plan geometry: drop the RL column from
+the vertex editor so a point is two numbers, not three. Before doing it, check whether the engine
+actually uses the Z of a breakline - if it does, say so rather than quietly throwing survey
+information away. (2) A general pattern, not one more panel: anything selectable in the software -
+a survey point, a constraint vertex, an IP, a PVI, a wall, a drain, a culvert - reports a common
+"selection" with a set of editable properties, and one inspector renders and saves them. Build the
+mechanism, wire the element types that exist today, and record it in CLAUDE.md as a design rule so
+later work follows it instead of inventing another bespoke panel.
+**Outcome.** (1) Checked first: the engine already reads a constraint vertex with Z of 0 or NaN as
+"interpolate me from the survey surface" (`surface_z`), so a boundary or void never needed a level -
+but a breakline imported with surveyed levels *does* shape the surface. So the editor is now plan
+only (Easting, Northing), and a plan edit carries the old level over to every vertex it did not move
+(`_carry_levels`), leaving 0 on the ones it did. Two more tests cover that. (2) `web/src/ui/selection.ts`
+is the new contract: an element describes itself as a `Selection` - kind, label, subtitle,
+`PropertyField[]` with units, an optional `apply` that returns the sentence for the toast, optional
+`actions` - and one inspector, mounted once per workspace, renders and saves all of them. Wired to
+four kinds today: survey point (read-only, with Zoom here), constraint vertex (Easting / Northing,
+Remove), road IP (E, N, R, Ls, label) and wall / drain / culvert (type, side, from, to, its own
+parameters, plus the length and quantities it implies). Recorded as design rule §6 in `CLAUDE.md`,
+including the parts that matter beyond the mechanism: every field states its unit, a value you
+cannot change is `readonly` rather than a disabled box, selecting never writes, and `apply` must say
+what a change costs. Also improved on the way: clicking anywhere in a structure row now selects it,
+rather than only the bare cell space.
+
+### 46. "1. upate the exiting demo projects as per our new 2d boudnary  2.ui fix keep the properties as a tab in same panel as layers, make them editable"
+**Interpretation.** (1) The demo projects still carry levels on their constraint rings from before
+the plan-geometry decision; flatten them so the stored data matches the model. Boundaries and voids
+never had a meaningful level, so those are safe to zero; a breakline may carry surveyed levels that
+do shape the surface, so leave those alone unless asked - and provide the switch rather than decide
+silently. (2) The properties inspector should not be a second floating card over the map: fold it
+into the existing Layers panel as a second tab, and make sure the fields there are editable.
+**Outcome.** (1) `python -m plm.admin flatten-constraints` added, with `--project`, `--kinds` and
+`--dry-run`; it reports every line it touches and says that stored TIN runs are snapshots. Ran a
+backup first (29.4 MB), then flattened: the three small demos were already flat, the 400,000-point
+project had levels on its boundary and all 178 voids - 179 lines, 2,506 vertices. Breaklines were
+deliberately left alone, because one imported with surveyed levels does shape the surface; the
+switch is there for anyone who disagrees. (2) The inspector is no longer a second floating card: the
+layer panel is now "Layers & properties" with two tabs, the Properties tab hosts the one embedded
+inspector, a new selection brings that tab forward, and clearing leaves a placeholder that says what
+can be picked. The road workspace keeps the floating card, having no layer panel. Fields are
+editable there as before - Easting and Northing on a vertex, R and Ls on an IP, type / side / extent
+/ parameters on a structure. Three bugs of my own on the way, all from the documented heredoc trap:
+two unicode escapes that did not match the source, and a `\n` that became a real newline inside a
+JavaScript template literal.

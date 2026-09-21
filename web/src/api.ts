@@ -51,6 +51,11 @@ export interface UsageRow { id: number; created: string; visitor_id: string | nu
   project_id: string; module: string; action: string; label: string; target_id: string; method: string; path: string; status: number; ms: number; detail: Record<string, any> }
 export interface UsageSummary { visitors: number; registered: number; active_today: number; logged_actions: number; days: number;
   by_action: { action: string; label: string; n: number; visitors: number; last: string }[]; labels: Record<string, string> }
+/** A wall or drain placed on one cross-section, in section coordinates (offset, RL).
+ *  Produced by plm.design.structures.section_structures - the same call the DXF / SVG sheets use. */
+export interface SectionStructure { id: number | null; kind: string; group: "wall" | "drain" | "cross"; side: "left" | "right"; type: string;
+  label: string; points: number[][]; closed: boolean; foundation: number[][] | null; height?: number; width?: number; depth?: number;
+  label_at: number[]; label_align: "left" | "right" | "center"; label_baseline: "middle" | "top" }
 export interface PointDetail { fid: number; id: string; x: number; y: number; z: number; remark: string; layer: string; source: string }
 export interface TileIndex { n: number; tile_triangles: number; n_triangles: number; n_nodes: number; bounds: number[]; z_range: number[]; tiles: { i: number; j: number; triangles: number; bounds: number[] }[] }
 
@@ -163,6 +168,10 @@ export const api = {
     addLine: (pid: string, body: { kind: string; layer?: string; name?: string; coords: number[][] }) => request<{ added: number }>("POST", `/api/projects/${pid}/lines`, body),
     deleteLines: (pid: string, params: Record<string, unknown>) => request<{ deleted: number }>("DELETE", `/api/projects/${pid}/lines${q(params)}`),
     updateLine: (pid: string, fid: number, params: Record<string, unknown>) => request<{ ok: boolean }>("PATCH", `/api/projects/${pid}/lines/${fid}${q(params)}`),
+    /** move / add / remove the vertices of a constraint line (and optionally reclassify it) */
+    editLine: (pid: string, fid: number, body: { kind?: string; name?: string; coords?: number[][] }) =>
+      request<{ ok: boolean; rebuild_tin: boolean; line: { fid: number; kind: string; closed: boolean; n_vertices: number; coords: number[][] } }>(
+        "PATCH", `/api/projects/${pid}/lines/${fid}`, body),
     pointsCsvUrl: (pid: string) => `/api/projects/${pid}/points.csv`,
   },
   tin: {

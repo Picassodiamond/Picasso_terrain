@@ -2,6 +2,7 @@
  *  workspace's save / build actions; the workspace re-renders plan, profile and section. */
 import * as d3 from "d3";
 import { api, ApiError } from "../../api";
+import { ro, selectElement } from "../../ui/selection";
 import { store, toast } from "../../state";
 import { button, download, el, field, fmt, fmtChainage, numberInput, select } from "../../ui/dom";
 import { kindLabel, openSheetPreview } from "./sheets";
@@ -369,6 +370,48 @@ export function renderStructuresStage(host: HTMLElement, ws: RoadWorkspace, drai
     }, "btn primary")),
     sugBox));
 
+  /** A wall, drain or culvert as a Selection: the numbers that define it, plus what it implies. */
+  function selectStructure(st: any): void {
+    const spec = kinds[st.kind] || {};
+    const q = (data.quantities?.rows || []).find((r: any) => r.id === st.id);
+    const sided = spec.sided !== false;
+    selectElement({
+      kind: spec.group === "wall" ? "wall" : spec.group === "drain" ? "drain" : "culvert",
+      id: st.id ?? `${st.kind}:${st.from}`,
+      label: `${shortLabel(st.kind)}${st.side && sided ? ` (${st.side})` : ""}`,
+      subtitle: `${fmtChainage(st.from)} – ${fmtChainage(st.to)}${st.source === "suggested" ? " · suggested" : ""}`,
+      fields: [
+        { key: "type", label: "Type", value: st.params?.type || spec.default_type || "", type: "select",
+          options: (spec.types || []).map((t: string) => ({ value: t, label: spec.type_labels?.[t] || t })),
+          hint: typeNote(st.kind, st.params?.type) },
+        ...(sided ? [{ key: "side", label: "Side", value: st.side || "left", type: "select" as const,
+          options: [{ value: "left", label: "left" }, { value: "right", label: "right" }, { value: "both", label: "both" }] }] : []),
+        { key: "from", label: "From", value: Number(st.from), type: "number", unit: "m", step: 1 },
+        { key: "to", label: "To", value: Number(st.to), type: "number", unit: "m", step: 1 },
+        ...fieldsFor(st).map((f: any) => ({ key: `p_${f.key}`, label: f.label, value: st.params?.[f.key] ?? null, type: "number" as const, unit: "m", step: Number(f.step) || 0.1 })),
+        ro("Length", (Number(st.to) - Number(st.from)).toFixed(1), "m"),
+        ...(q ? [ro("Quantity", Object.entries(q.total || {}).map(([k, v]) => `${k} ${Number(v).toFixed(1)}`).join(", ") || "EM–")] : []),
+      ],
+      apply: (v) => {
+        st.params = { ...(st.params || {}), type: String(v.type) };
+        if (sided) st.side = String(v.side);
+        st.from = Number(v.from);
+        st.to = Number(v.to);
+        for (const f of fieldsFor(st)) {
+          const val = v[`p_${f.key}`];
+          if (val !== null && val !== undefined && val !== "") st.params[f.key] = Number(val);
+        }
+        ws.markDirty("structures");
+        ws.renderStage();
+        return `${shortLabel(st.kind)} updated EM– save the structures to keep it`;
+      },
+      actions: [
+        { label: "Show", run: () => ws.setStation(st.from) },
+        { label: "Delete", danger: true, run: () => { const i = list.indexOf(st); if (i >= 0) { list.splice(i, 1); ws.markDirty("structures"); ws.renderStage(); } } },
+      ],
+    });
+  }
+
   // -------------------------------------------------- table of stored / edited structures
   const shown = list.filter((s) => inGroup(s.kind));
   const tbl = el("table", { class: "data compact" }, el("tr", {}, el("th", {}, "kind"), el("th", {}, "type"), el("th", {}, "side"), el("th", {}, "from"), el("th", {}, "to"), el("th", {}, "parameters"), el("th")));
@@ -390,7 +433,7 @@ export function renderStructuresStage(host: HTMLElement, ws: RoadWorkspace, drai
       const inp = numCell(s.params?.[f.key] ?? null, (x) => { s.params = { ...(s.params || {}), [f.key]: x }; ws.markDirty("structures"); }, f.step, "num tiny");
       params.append(el("label", { class: "param-cell" }, el("span", { class: "muted" }, f.label), inp));
     }
-    tbl.appendChild(el("tr", { class: "clickable", title: `${s.source === "suggested" ? "suggested: " : ""}${s.note || ""}\n${typeNote(s.kind, s.params?.type)}`, onClick: (ev: Event) => { if ((ev.target as HTMLElement).tagName === "TD") ws.setStation(s.from); } },
+    tbl.appendChild(el("tr", { class: "clickable", title: `${s.source === "suggested" ? "suggested: " : ""}${s.note || ""}\n${typeNote(s.kind, s.params?.type)}`, onClick: (ev: Event) => { selectStructure(s); if ((ev.target as HTMLElement).tagName === "TD") ws.setStation(s.from); } },
       el("td", {}, kindSel), el("td", {}, typeSel), el("td", {}, kinds[s.kind]?.sided === false ? el("span", { class: "muted" }, "–") : sideSel),
       el("td", {}, numCell(s.from, (x) => { s.from = x; ws.markDirty("structures"); }, "1")), el("td", {}, numCell(s.to, (x) => { s.to = x; ws.markDirty("structures"); }, "1")),
       el("td", {}, params),

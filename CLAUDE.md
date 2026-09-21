@@ -40,6 +40,10 @@ node e2e/road_check.mjs http://127.0.0.1:8000 <projectId>
 node e2e/help_check.mjs http://127.0.0.1:8000
 node e2e/visitor_check.mjs http://127.0.0.1:8000
 node e2e/keys_check.mjs http://127.0.0.1:8000 <terrainProjectId> <roadProjectId>
+node e2e/tools_check.mjs http://127.0.0.1:8000 <roadProjectId>
+node e2e/tin_edges_check.mjs http://127.0.0.1:8000 <terrainProjectId>
+node e2e/line_edit_check.mjs http://127.0.0.1:8000 <terrainProjectId>
+node e2e/selection_check.mjs http://127.0.0.1:8000 <terrainProjectId> <roadProjectId>
 ```
 
 Report failures with their output. Do not describe a result you have not seen.
@@ -70,7 +74,45 @@ Report failures with their output. Do not describe a result you have not seen.
 * After a UI change that appears in the help pages, re-run `node e2e/help_shots.mjs` so the
   screenshots still match the software.
 
-## 6. Writing for the user
+## 6. Selection and properties (design rule)
+
+**If it can be picked, it has properties; if it has properties, they are shown and edited in one
+place.** `web/src/ui/selection.ts` holds the contract. An element does not get its own panel: it
+describes itself as a `Selection` and the single inspector renders it.
+
+```ts
+selectElement({
+  kind: "wall", id: 3, label: "Retaining wall (left)",
+  subtitle: "0+040 – 0+120 · gabion",
+  fields: [{ key: "height", label: "Height", value: 4.5, type: "number", unit: "m", step: 0.1 }, ro("Length", 80, "m")],
+  apply: (v) => { ...; return "Wall updated — save the structures to keep it"; },
+  actions: [{ label: "Show", run: () => ws.setStation(st.from) }],
+});
+```
+
+Rules for anything new:
+
+* **One contract.** Survey points, constraint vertices, IPs, PVIs, walls, drains, culverts and
+  whatever comes next all report a `Selection`. Adding an element type means writing a provider, not
+  a panel. If you find yourself building a bespoke properties form, you are doing it wrong.
+* **Every field carries its unit** (`m`, `%`, `m³`) and reads as the engineer says it: *Radius R*,
+  *Transition Ls*, *Easting*. A field the user cannot change is `readonly` (`ro()`), not a disabled
+  box.
+* **Say what a change costs.** `apply` returns the sentence for the toast, and it must state the
+  consequence where there is one - "save the alignment to keep it", "rebuild the TIN to use it". A
+  silent edit that quietly invalidates a downstream result is a bug.
+* **Nothing is written on selection.** Picking an element never changes data; only `apply` does.
+* **One panel, not many.** The inspector is mounted once per workspace (`mountInspector(host, opts)`)
+  and torn down with it (`clearSelection()` on destroy). In the terrain workspace it is the
+  **Properties** tab of the layer panel, not a second card over the map; a new selection brings that
+  tab forward.
+
+Related: constraint lines (breaklines, boundaries, voids) are **plan geometry**. The vertex editor
+asks for Easting and Northing only - a constraint vertex whose Z is 0 gets its level interpolated
+from the survey surface by the engine (`surface_z`). A breakline imported with surveyed levels keeps
+them on every vertex an edit does not move.
+
+## 7. Writing for the user
 
 The user is a civil and road engineer in Nepal, not a Python developer. Explain in engineering terms,
 name the clause or table behind a rule, and keep code out of prose unless the file is the point.

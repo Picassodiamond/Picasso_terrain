@@ -158,6 +158,21 @@ if (did) {
   });
 } else console.log("no road design found: road screenshots skipped");
 
+// ---------------------------------------------------------------- the triangulation
+await tryStep("tin edges", async () => {
+  await page.goto(`${base}/#/p/${tpid}`, { waitUntil: "networkidle" });
+  await page.waitForSelector("#cesium canvas", { timeout: 60000 });
+  await idle();
+  await settle(2500);
+  const row = page.locator(".layer-item", { hasText: "Triangle edges" }).first();
+  await row.locator('input[type="checkbox"]').first().click();
+  await idle();
+  await settle(2500);
+  await shot("terrain-tin-edges");
+  await row.locator('input[type="checkbox"]').first().click();   // leave it as we found it
+  await settle(600);
+});
+
 // ---------------------------------------------------------------- keyboard shortcut card
 await tryStep("keyboard help", async () => {
   await page.goto(`${base}/#/p/${tpid}`, { waitUntil: "networkidle" });

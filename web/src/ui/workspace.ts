@@ -11,6 +11,7 @@ import { MapViewer, type BaseMap } from "../map/viewer";
 import { store, toast, type AppState } from "../state";
 import { button, el, fmt, fmtChainage, parseChainage, select } from "./dom";
 import { helpBinding, registerShortcuts, showShortcutHelp } from "./keys";
+import { clearSelection, ro, selectElement } from "./selection";
 import { renderAlignmentPanel } from "./panels/alignment";
 import { renderContoursPanel } from "./panels/contours";
 import { renderDataPanel } from "./panels/data";
@@ -68,7 +69,7 @@ export class Workspace {
   comments: Comment[] = [];
   currentSectionSetData: SectionSet | null = null;
   /** map-click hooks registered by panels (tools) */
-  toolHandlers: { onClick?: (p: { x: number; y: number; z: number }, picked: PickId | null) => void; onDouble?: (p: { x: number; y: number; z: number } | null) => void; onMove?: (p: { x: number; y: number; z: number } | null) => void; onDrag?: (i: number, p: { x: number; y: number; z: number }, phase: "start" | "move" | "end") => void; hint?: string } = {};
+  toolHandlers: { onClick?: (p: { x: number; y: number; z: number }, picked: PickId | null) => void; onDouble?: (p: { x: number; y: number; z: number } | null) => void; onMove?: (p: { x: number; y: number; z: number } | null) => void; onDrag?: (i: number, p: { x: number; y: number; z: number }, phase: "start" | "move" | "end") => void; onDragVertex?: (i: number, p: { x: number; y: number; z: number }, phase: "start" | "move" | "end") => void; hint?: string } = {};
 
   constructor(root: HTMLElement, project: Project, onClose: () => void) {
     this.root = root;
@@ -214,12 +215,21 @@ export class Workspace {
       onDoubleClick: (p) => this.toolHandlers.onDouble?.(p),
       onMove: (p, picked) => { this.statusCoords.textContent = p ? `E ${fmt(p.x, 2)}  N ${fmt(p.y, 2)}` : ""; this.toolHandlers.onMove?.(p); void picked; },
       onDragIp: (i, p, phase) => this.toolHandlers.onDrag?.(i, p, phase),
+      onDragVertex: (i, p, phase) => this.toolHandlers.onDragVertex?.(i, p, phase),
       onRightClick: () => { if (store.get("tool") !== "none") this.setTool("none"); },
     };
+    // panning the globe should look like panning: grab, and grabbing while the button is down.
+    // A drawing tool overrides this with a crosshair in setTool().
+    const cv = this.mv.scene.canvas as HTMLCanvasElement;
+    cv.style.cursor = "grab";
+    cv.addEventListener("pointerdown", () => { if (store.get("tool") === "none") cv.style.cursor = "grabbing"; });
+    for (const ev of ["pointerup", "pointerleave"]) {
+      cv.addEventListener(ev, () => { if (store.get("tool") === "none") cv.style.cursor = "grab"; });
+    }
     this.unregisterKeys = registerShortcuts("Terrain workspace", this.shortcuts());
     window.addEventListener("resize", this.onResize);
 
-    this.layerTree = new LayerTree(this, mapWrap);
+    this.layerTree = new LayerTree(this, mapWrap);   // it hosts the Properties tab as well
     this.unsub.push(store.on("layers", (v) => this.layers.setVisibility(v)));
     this.unsub.push(store.on("busy", (v) => { this.busyEl.style.display = v ? "" : "none"; this.busyEl.querySelector(".busy-text")!.textContent = v || ""; }));
     this.unsub.push(store.on("currentSectionSet", () => void this.loadSectionSet()));
@@ -344,11 +354,27 @@ export class Workspace {
     if (tool === "none") { this.toolHandlers = {}; this.layers.setDraftLine(null); this.interaction.dragEnabled = false; }
     this.toolHint.style.display = tool === "none" ? "none" : "";
     this.toolHint.textContent = hint || this.toolHandlers.hint || "";
-    this.mv.scene.canvas.style.cursor = tool === "none" ? "" : "crosshair";
+    this.interaction.idleCursor = tool === "none" ? "grab" : "crosshair";
+    this.mv.scene.canvas.style.cursor = this.interaction.idleCursor;
   }
 
   private defaultClick(p: { x: number; y: number; z: number }, picked: PickId | null): void {
-    const show = (d: { fid: number; id?: string; z: number; remark?: string }) => toast(`Point ${d.id || d.fid}: RL ${fmt(d.z)} ${d.remark ? "· " + d.remark : ""}`);
+    // every element the user can pick reports a Selection; one inspector renders and saves it
+    const show = (d: { fid: number; id?: string; z: number; remark?: string; x?: number; y?: number; layer?: string; source?: string }) => {
+      selectElement({
+        kind: "survey point", id: d.fid, label: `Point ${d.id || d.fid}`,
+        subtitle: [d.layer, d.source, d.remark].filter(Boolean).join(" · ") || undefined,
+        fields: [
+          ro("Easting", d.x !== undefined ? d.x.toFixed(3) : "–", "m"),
+          ro("Northing", d.y !== undefined ? d.y.toFixed(3) : "–", "m"),
+          ro("RL", d.z.toFixed(3), "m"),
+          ro("Point id", d.id || String(d.fid)),
+          ro("Remark", d.remark || "–"),
+          ro("Layer", d.layer || "–"),
+        ],
+        actions: [{ label: "Zoom here", run: () => { if (d.x !== undefined && d.y !== undefined) store.emit("map:flyTo", [d.x - 25, d.y - 25, d.x + 25, d.y + 25]); } }],
+      });
+    };
     if (picked?.type === "point") {
       const pk = picked;
       void api.data.point(this.project.id, pk.fid).then(show).catch(() => show(pk));
@@ -447,12 +473,13 @@ export class Workspace {
    *  can cull tiles outside the view. */
   private async loadTinMesh(run: number, nTriangles: number, zRange?: [number, number]): Promise<void> {
     const style = store.get("tinStyle");
+    const edges = store.get("layers").tinEdges;   // building the triangulation costs memory, so only when asked
     this.layers.clearTin();
     this.tinIndexParts = [];
     this.tinVertices = null;
     if (nTriangles <= Workspace.TILE_THRESHOLD) {
       const buf = await api.tin.mesh(this.project.id, run);
-      this.layers.addTinPart(buf, style, zRange);
+      this.layers.addTinPart(buf, style, zRange, edges);
       this.addTinIndexPart(buf);
     } else {
       const idx = await api.tin.tiles(this.project.id, run);
@@ -466,7 +493,7 @@ export class Workspace {
         for (let t = queue.shift(); t; t = queue.shift()) {
           const buf = await api.tin.tileMesh(this.project.id, run, t.i, t.j);
           if (store.get("currentRun") !== run) return; // user switched runs meanwhile
-          this.layers.addTinPart(buf, style, zr);
+          this.layers.addTinPart(buf, style, zr, edges);
           this.addTinIndexPart(buf);
           store.set("busy", `Loading TIN ${++done}/${total} tiles`);
         }
@@ -726,6 +753,8 @@ export class Workspace {
     this.unsub.forEach((u) => u());
     this.unregisterKeys?.();
     this.unregisterKeys = null;
+    this.layerTree?.destroy();
+    clearSelection();
     window.removeEventListener("resize", this.onResize);
     this.interaction?.destroy();
     this.mv?.destroy();

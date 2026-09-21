@@ -296,6 +296,108 @@ def drain_section(type_id: str, width: float, depth: float) -> dict:
             "perimeter": round(float(per), 3), "excavation": round(float(exc), 3), "lining_thickness": th, "top_width": round(float(top_w), 3)}
 
 
+def _num(v, default: float) -> float:
+    """Float, treating only None / non-numeric as missing - an offset of 0.0 is a real value."""
+    try:
+        return default if v is None else float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def structures_at(structures: Iterable[dict], chainage: float, tol: float = 0.5) -> list[tuple[dict, str]]:
+    """(structure, side) pairs that cover this chainage; a structure on both sides yields two."""
+    out = []
+    for s in structures or ():
+        if float(s["from"]) - tol <= chainage <= float(s["to"]) + tol:
+            side = s.get("side")
+            for sd in (("left", "right") if side == "both" else ((side,) if side else ())):
+                out.append((s, sd))
+    return out
+
+
+def section_structures(sec: dict, structures: Iterable[dict], tol: float = 0.5) -> list[dict]:
+    """Where every structure that covers this chainage sits on the cross-section.
+
+    Section coordinates throughout: x is the offset from the centre line (negative left), y is the
+    RL, both in metres - the same frame the corridor's `ground` and `design` lines use. A wall's
+    face stands on that side's hinge and the body leans outward; a drain's invert sits on the ground
+    line at its offset. Drawn identically by the DXF / SVG sheets and by the browser, because both
+    call this.
+    """
+    g = np.asarray(sec.get("ground") or [], float)
+    design = sec.get("design") or []
+    out: list[dict] = []
+
+    def ground_z(o: float) -> float | None:
+        if not len(g) or o < g[:, 0].min() - 1e-6 or o > g[:, 0].max() + 1e-6:
+            return None
+        return float(np.interp(o, g[:, 0], g[:, 1]))
+
+    for st, side in structures_at(structures, float(sec["chainage"]), tol):
+        kind, prm = st["kind"], st.get("params") or {}
+        spec = STRUCTURE_KINDS.get(kind, {})
+        group = spec.get("group")
+        sd = sec.get(side) or {}
+        sgn = -1.0 if side == "left" else 1.0
+        name = str(spec.get("label", kind)).split(" (")[0]
+        base_item = {"id": st.get("id"), "kind": kind, "group": group, "side": side,
+                     "type": str(prm.get("type") or ""), "label": name}
+
+        if group == "wall":
+            stored = float(prm.get("height") or 0.0)
+            hinge_o = _num(sd.get("hinge_offset"), sgn * 4.0)
+            hinge_z = _num(sd.get("hinge_z"), _num(sec.get("design_z"), 0.0))
+            catch_o = sd.get("catch_offset")
+            # where the face stands, and the ground it stands on
+            if kind in ("toe_wall", "catch_wall") and catch_o is not None:
+                face_o = float(catch_o)
+            else:
+                face_o = hinge_o
+            base_z = ground_z(face_o)
+            if base_z is None:
+                base_z = _num(sd.get("ground_z_at_hinge"), hinge_z - max(stored, 1.0))
+            # a retaining or breast wall exists to span hinge to ground, so that drop is its height
+            spans = kind in ("retaining_wall", "breast_wall")
+            needed = hinge_z - base_z
+            h = needed if spans and needed > 0.1 else (stored or abs(_num(sd.get("height"), 0.0)) or 1.0)
+            h = max(h, 0.1)
+            w = wall_section(str(prm.get("type")), h, prm.get("foundation_depth"), prm.get("batter"))
+            body = [[round(face_o + sgn * x, 4), round(base_z + y, 4)] for x, y in w["points"]]
+            fd = w["foundation"]
+            f0, f1 = face_o, face_o + sgn * fd["width"]
+            foundation = [[round(f0, 4), round(base_z, 4)], [round(f1, 4), round(base_z, 4)],
+                          [round(f1, 4), round(base_z - fd["depth"], 4)], [round(f0, 4), round(base_z - fd["depth"], 4)]]
+            label = f"{name} {h:.1f} m"
+            if stored and abs(stored - h) > 0.2:
+                label += f" (recorded {stored:.1f} m)"
+            out.append({**base_item, "points": body, "closed": True, "foundation": foundation,
+                        "height": round(h, 3), "recorded_height": round(stored, 3) or None,
+                        "label": label,
+                        "label_at": [round(face_o + sgn * (w["base_width"] + 0.6), 4), round(base_z + h / 2, 4)],
+                        "label_align": "left" if side == "right" else "right", "label_baseline": "middle"})
+
+        elif group == "drain":
+            width = float(prm.get("width") or 0.6)
+            depth = float(prm.get("depth") or 0.5)
+            d = drain_section(str(prm.get("type")), width, depth)
+            base = sd.get("catch_offset") if sd.get("catch_offset") is not None else sd.get("hinge_offset")
+            extra = float(prm.get("offset") or 0.0) if kind == "catch_drain" else 0.6
+            centre = float(base if base is not None else sgn * 4.0) + sgn * (extra + d["top_width"] / 2)
+            top_z = ground_z(centre)
+            if top_z is None:
+                continue                      # the drain falls outside the surveyed ground
+            invert = top_z - depth
+            pts = [[round(centre + x, 4), round(invert + y, 4)] for x, y in d["points"]]
+            if design and min(o for o, _ in pts) > min(o for o, _ in design) and max(o for o, _ in pts) < max(o for o, _ in design):
+                continue                      # inside the formation: the template ditch already shows it
+            out.append({**base_item, "points": pts, "closed": False, "foundation": None,
+                        "width": round(width, 3), "depth": round(depth, 3),
+                        "label_at": [round(centre, 4), round(invert - 0.3, 4)],
+                        "label_align": "center", "label_baseline": "top"})
+
+    return out
+
+
 def quantities(s: dict) -> dict:
     """Material quantities of one structure: per metre run and for its whole length."""
     kind, p = s["kind"], s.get("params") or {}

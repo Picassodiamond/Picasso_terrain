@@ -292,3 +292,49 @@ table.keys-table td { padding: 3px 6px; }
 td.keys-combo { width: 170px; white-space: nowrap; }
 kbd { display: inline-block; min-width: 18px; text-align: center; padding: 1px 6px; margin-right: 4px; font: inherit; font-size: 11px;
   background: var(--panel-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; color: var(--text); }
+
+/* walls and drains on the cross-section (charts/section.ts) */
+.wall-hatch-line { stroke: #f59e0b; stroke-width: 1; opacity: .5; }
+.structure-wall { fill: url(#plm-wall-hatch); stroke: #f59e0b; stroke-width: 1.4; }
+.structure-foundation { fill: none; stroke: #f59e0b; stroke-width: 1; stroke-dasharray: 4 3; opacity: .8; }
+.structure-drain { fill: none; stroke: #38bdf8; stroke-width: 1.6; }
+.structure-label { font-size: 10px; fill: #fbbf24; }
+.structure-label.drain { fill: #7dd3fc; }
+
+/* plan tool palette (modules/road/plan.ts) */
+.tool-palette { display: inline-flex; gap: 2px; margin-right: 8px; padding: 2px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
+button.tool-btn { background: transparent; border: 1px solid transparent; border-radius: 6px; color: var(--muted); font-size: 11px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+button.tool-btn:hover:not(:disabled) { color: var(--text); border-color: #475569; }
+button.tool-btn.active { background: var(--panel); color: var(--text); border-color: var(--accent); }
+button.tool-btn:disabled { opacity: .4; cursor: not-allowed; }
+/* a PVI on the profile is a node you pick up, like an IP on the plan */
+.pvi-handle { cursor: move; }
+.pvi-handle:active { cursor: grabbing; }
+
+/* the properties inspector (ui/selection.ts) - one card for whatever is selected */
+.inspector { position: absolute; left: 10px; bottom: 34px; width: 268px; max-height: 52%; overflow: auto; z-index: 6;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+.inspector-head { display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 9px; border-bottom: 1px solid var(--border); }
+.inspector-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.inspector-title { font-weight: 600; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector-body { padding: 8px 9px 10px; }
+.inspector-sub { font-size: 11px; margin-bottom: 6px; }
+.inspector-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; }
+.inspector-label { color: var(--muted); font-size: 11px; }
+.inspector-value { display: flex; align-items: center; gap: 4px; }
+.inspector-value input, .inspector-value select { width: 100%; padding: 2px 5px; font-size: 11px; }
+.inspector-unit { color: var(--muted); font-size: 10px; }
+.inspector-ro { font-size: 11px; }
+.inspector .btn-row { margin-top: 8px; }
+
+/* Properties as a tab of the layer panel (ui/layerTree.ts + ui/selection.ts) */
+.layer-tabs { display: flex; gap: 2px; padding: 4px 6px 0; border-bottom: 1px solid var(--border); }
+button.layer-tab { flex: 1; background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--muted);
+  font-size: 11px; padding: 4px 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.layer-tab:hover { color: var(--text); }
+button.layer-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.layer-props { max-height: 52vh; overflow: auto; }
+.layer-panel.collapsed .layer-tabs { display: none; }
+.inspector.embedded { position: static; width: auto; max-height: none; border: none; box-shadow: none; background: transparent; }
+.inspector.embedded .inspector-head { border-bottom: 1px solid var(--border); }
+.inspector-empty { font-size: 11px; line-height: 1.35; }

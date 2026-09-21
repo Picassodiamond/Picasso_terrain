@@ -362,3 +362,12 @@ class VisitorStateOut(BaseModel):
     needs_intake: bool = False
     visitor: VisitorOut | None = None
     prefill: dict[str, str] = {}
+
+
+class LinePatchIn(BaseModel):
+    """Edit a constraint line: its classification, its vertices, or both."""
+    kind: str | None = None
+    layer: str | None = None
+    name: str | None = None
+    #: replacement vertices in project coordinates, (x, y) or (x, y, z)
+    coords: list[list[float]] | None = None

@@ -8,6 +8,8 @@ export interface DrawCallbacks {
   onDoubleClick?: (p: { x: number; y: number; z: number } | null) => void;
   onMove?: (p: { x: number; y: number; z: number } | null, picked: PickId | null) => void;
   onDragIp?: (index: number, p: { x: number; y: number; z: number }, phase: "start" | "move" | "end") => void;
+  /** a vertex of the constraint line being edited */
+  onDragVertex?: (index: number, p: { x: number; y: number; z: number }, phase: "start" | "move" | "end") => void;
   onRightClick?: () => void;
 }
 
@@ -16,7 +18,10 @@ export class Interaction {
   private mv: MapViewer;
   callbacks: DrawCallbacks = {};
   dragEnabled = false;
+  /** what the pointer looks like over empty map: the workspace sets it per tool */
+  idleCursor = "grab";
   private dragging: number | null = null;
+  private draggingVertex: number | null = null;
   private lastClick = 0;
 
   constructor(mv: MapViewer) {
@@ -40,8 +45,15 @@ export class Interaction {
         if (p) this.callbacks.onDragIp?.(this.dragging, p, "move");
         return;
       }
+      if (this.draggingVertex !== null) {
+        const p = this.mv.pickProject(e.endPosition);
+        if (p) this.callbacks.onDragVertex?.(this.draggingVertex, p, "move");
+        return;
+      }
       const picked = this.pick(e.endPosition);
-      this.mv.scene.canvas.style.cursor = picked && (picked.type === "ip" || picked.type === "comment" || picked.type === "point") ? "pointer" : "";
+      const over = picked && (picked.type === "ip" || picked.type === "vertex" || picked.type === "comment" || picked.type === "point");
+      const draggable = this.dragEnabled && picked && (picked.type === "ip" || picked.type === "vertex");
+      this.mv.scene.canvas.style.cursor = over ? (draggable ? "move" : "pointer") : this.idleCursor;
       this.callbacks.onMove?.(this.mv.pickProject(e.endPosition), picked);
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
     this.handler.setInputAction((e: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
@@ -52,6 +64,11 @@ export class Interaction {
         this.mv.scene.screenSpaceCameraController.enableInputs = false;
         const p = this.mv.pickProject(e.position);
         if (p) this.callbacks.onDragIp?.(picked.index, p, "start");
+      } else if (picked?.type === "vertex") {
+        this.draggingVertex = picked.index;
+        this.mv.scene.screenSpaceCameraController.enableInputs = false;
+        const p = this.mv.pickProject(e.position);
+        if (p) this.callbacks.onDragVertex?.(picked.index, p, "start");
       }
     }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
     this.handler.setInputAction((e: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
@@ -62,6 +79,13 @@ export class Interaction {
         const p = this.mv.pickProject(e.position);
         if (p) this.callbacks.onDragIp?.(idx, p, "end");
         this.lastClick = performance.now(); // suppress the click that follows a drag
+      } else if (this.draggingVertex !== null) {
+        const idx = this.draggingVertex;
+        this.draggingVertex = null;
+        this.mv.scene.screenSpaceCameraController.enableInputs = true;
+        const p = this.mv.pickProject(e.position);
+        if (p) this.callbacks.onDragVertex?.(idx, p, "end");
+        this.lastClick = performance.now();
       }
     }, Cesium.ScreenSpaceEventType.LEFT_UP);
   }

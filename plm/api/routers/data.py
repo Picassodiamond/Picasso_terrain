@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from typing import Sequence
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -9,7 +10,7 @@ from fastapi.responses import JSONResponse
 from ..db import AppDB
 from ..deps import get_db, get_project, get_settings, get_store, guest_check, raise_service, require_project
 from ..gpkg import ProjectStore
-from ..schemas import ImportResult
+from ..schemas import ImportResult, LinePatchIn
 from .. import services
 from ..services import ServiceError
 
@@ -137,13 +138,71 @@ def lines_summary(project_id: str, p: dict = Depends(get_project), store: Projec
 
 @router.patch("/lines/{fid}")
 def update_line(project_id: str, fid: int, kind: str | None = None, layer: str | None = None, name: str | None = None,
+                body: LinePatchIn | None = None,
                 p: dict = Depends(get_project), store: ProjectStore = Depends(get_store), _: dict = Depends(require_project("editor"))):
+    """Reclassify a constraint line and / or move its vertices.
+
+    The query parameters are kept for the older callers; a JSON body may carry the same fields plus
+    `coords`, the replacement vertices. A boundary or a void encloses an area, so it needs three
+    distinct corners and is closed for you if the last vertex does not repeat the first."""
+    body = body or LinePatchIn()
+    kind = kind if kind is not None else body.kind
+    layer = layer if layer is not None else body.layer
+    name = name if name is not None else body.name
+    existing = store.line(fid)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"no constraint line with fid {fid}")
     if kind is not None:
         kind = {"hole": "void", "breakline": "feature"}.get(kind, kind)
         if kind not in ("feature", "boundary", "void", "contour"):
             raise HTTPException(status_code=400, detail="kind must be feature|boundary|void|contour (or hole/breakline)")
-    store.update_line(fid, kind=kind, layer=layer, name=name)
-    return {"ok": True}
+
+    coords = body.coords
+    if coords is not None:
+        effective = kind or existing.get("kind")
+        coords = [list(map(float, c)) for c in coords]
+        coords = _carry_levels(coords, existing.get("coords"))
+        if effective in ("boundary", "void"):
+            ring = coords[:-1] if len(coords) > 1 and _same_xy(coords[0], coords[-1]) else coords
+            if len(ring) < 3:
+                raise HTTPException(status_code=400, detail=f"a {effective} encloses an area: it needs at least three corners")
+            coords = [*ring, list(ring[0])]          # close it
+        elif len(coords) < 2:
+            raise HTTPException(status_code=400, detail="a line needs at least two vertices")
+    try:
+        store.update_line(fid, kind=kind, layer=layer, name=name, coords=coords)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    out = store.line(fid) or {}
+    # the store hands back a numpy array of vertices; the wire wants plain numbers
+    return {"ok": True, "rebuild_tin": coords is not None or kind is not None,
+            "line": {"fid": fid, "kind": out.get("kind"), "layer": out.get("layer", ""), "name": out.get("name", ""),
+                     "closed": bool(out.get("closed")), "n_vertices": int(len(out.get("coords", []))),
+                     "coords": [[float(v) for v in c] for c in out.get("coords", [])]}}
+
+
+def _carry_levels(coords: list[list[float]], previous) -> list[list[float]]:
+    """Give a 2-D vertex back the level it had, when it has not moved in plan.
+
+    Constraint lines are edited in plan, so the browser sends (x, y). A boundary or void never had a
+    level of its own. A breakline imported with surveyed levels did, and those levels shape the
+    surface, so losing them because a *different* vertex moved would be wrong. A vertex that did
+    move gets 0, which the engine reads as "interpolate me from the survey".
+    """
+    if previous is None or not len(previous):
+        return coords
+    at = {(round(float(c[0]), 4), round(float(c[1]), 4)): (float(c[2]) if len(c) > 2 else 0.0) for c in previous}
+    out = []
+    for c in coords:
+        if len(c) > 2:
+            out.append(c)                       # a level was given explicitly: respect it
+            continue
+        out.append([c[0], c[1], at.get((round(c[0], 4), round(c[1], 4)), 0.0)])
+    return out
+
+
+def _same_xy(a: Sequence[float], b: Sequence[float], tol: float = 1e-9) -> bool:
+    return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
 
 
 @router.delete("/lines")

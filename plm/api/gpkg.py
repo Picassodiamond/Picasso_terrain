@@ -397,16 +397,43 @@ class ProjectStore:
                 n = c.execute("DELETE FROM lines").rowcount
         return int(n)
 
-    def update_line(self, fid: int, kind: str | None = None, layer: str | None = None, name: str | None = None) -> None:
+    def update_line(self, fid: int, kind: str | None = None, layer: str | None = None, name: str | None = None,
+                    coords: Sequence[Sequence[float]] | None = None) -> None:
+        """Change a line's classification and / or its geometry.
+
+        `coords` replaces the vertices: (x, y) or (x, y, z) in project coordinates. `closed` and
+        `n_vertices` are recomputed from what is given, and the layer extent is widened, so a vertex
+        dragged outside the old extent still sits inside the map."""
         sets, vals = [], []
         for k, v in (("kind", kind), ("layer", layer), ("name", name)):
             if v is not None:
                 sets.append(f"{k}=?")
                 vals.append(v)
-        if sets:
-            vals.append(fid)
-            with self._connect() as c:
-                c.execute(f"UPDATE lines SET {', '.join(sets)} WHERE fid=?", vals)
+        xy = None
+        if coords is not None:
+            a = np.asarray(coords, dtype=float)
+            if a.ndim != 2 or a.shape[0] < 2 or a.shape[1] not in (2, 3):
+                raise ValueError("a line needs at least two vertices of (x, y) or (x, y, z)")
+            if a.shape[1] == 2:
+                a = np.column_stack([a, np.zeros(len(a))])
+            if not np.isfinite(a).all():
+                raise ValueError("vertex coordinates must all be numbers")
+            sets += ["geom=?", "closed=?", "n_vertices=?"]
+            vals += [gpkg_blob(shapely.LineString(a[:, :3]), self.srs_id),
+                     int(bool(np.allclose(a[0, :2], a[-1, :2]))), len(a)]
+            xy = a
+        if not sets:
+            return
+        vals.append(fid)
+        with self._connect() as c:
+            c.execute(f"UPDATE lines SET {', '.join(sets)} WHERE fid=?", vals)
+            if xy is not None:
+                self._bump_extent(c, "lines", xy[:, 0], xy[:, 1])
+
+    def line(self, fid: int) -> dict | None:
+        """One line as the same dict shape `lines()` returns."""
+        rows = [ln for ln in self.lines() if ln.get("fid") == fid]
+        return rows[0] if rows else None
 
     # ------------------------------------------------------------------ TIN runs
     def save_tin(self, tin: TIN, params: dict, stats: dict, issues: Sequence[TinIssue] = (),

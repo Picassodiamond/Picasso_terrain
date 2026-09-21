@@ -107,6 +107,80 @@ max_edge_length=..., min_angle_deg=...)` -> `TinResult` (TIN, rejected triangles
 * **Library** (`#/library`): every TIN run and design is catalogued with a WGS84 footprint, size, CRS, tags and lineage,
   searchable by text, tag and bounding box, and can be cloned into a new project. Visibility follows the project.
 
+## Selection and properties
+
+One contract for every element: `web/src/ui/selection.ts`. Anything the user can pick - a survey
+point, a vertex of a breakline, an IP, a wall, a drain, a culvert - describes itself as a
+`Selection` (kind, label, subtitle, `PropertyField[]`, an optional `apply`, optional `actions`), and
+a single inspector renders and saves it. Adding an element type means writing a provider, not
+another panel. `mountInspector(host, { embedded })` is called once per workspace: in the terrain
+workspace the layer panel hosts it as a **Properties** tab beside **Layers**, so there is one card
+over the map rather than two; the road workspace mounts it floating over the plan, where there is no
+layer panel. A new selection brings its tab forward.
+
+Every field carries its unit and the wording an engineer uses (*Radius R*, *Transition Ls*,
+*Easting*); anything not editable is `readonly` via `ro()`, never a disabled box. `apply` returns
+the sentence for the toast and must state the consequence - "save the alignment to keep it",
+"rebuild the TIN to use it" - because a silent edit that invalidates a downstream result is a bug.
+Selecting never writes; only `apply` does. The rule is recorded in `CLAUDE.md` §6 so later work
+follows it. `web/e2e/selection_check.mjs` drives a vertex, an IP and a wall through the same panel.
+
+## Editing a constraint line
+
+Constraint lines are **plan geometry**: the editor asks for Easting and Northing only. The engine
+already treats a constraint vertex whose Z is 0 or NaN as "interpolate me from the survey surface"
+(`surface_z`), which is what a boundary or a void has always needed. A breakline imported with
+surveyed levels does shape the surface, so a plan edit carries the old level over to every vertex it
+did not move and leaves 0 on the ones it did (`_carry_levels`).
+
+`PATCH /api/projects/{id}/lines/{fid}` takes a JSON body (`LinePatchIn`) whose `coords` replace the
+vertices; the older query-parameter form for kind / layer / name still works. `ProjectStore.update_line`
+rewrites the geometry, recomputes `closed` and `n_vertices` and widens the layer extent, so a vertex
+dragged past the old edge still sits inside the map. A boundary or a void encloses an area, so the
+route requires three distinct corners and closes the ring itself; a line needs two vertices.
+
+In the browser the Data panel's constraint table gained an **Edit** button. It puts a handle on every
+vertex (`MapLayers.setEditLine`, pick type `vertex`, dragged through `Interaction.onDragVertex`) and
+opens a table of Easting / Northing / RL for typing exact values - the map is for judgement, the table
+is for surveyed numbers. A closed ring shows its corners once and moves the repeated last vertex with
+the first. Nothing is written until Save, and the toast says what every edit here means: the terrain
+is a snapshot, so the TIN must be built again to use it. `tests/test_line_edit.py` covers the rules,
+`web/e2e/line_edit_check.mjs` drives the editor.
+
+`python -m plm.admin flatten-constraints [--project ID] [--kinds boundary,void] [--dry-run]` brings
+stored data to the same model: it zeroes the Z of the named kinds so the engine interpolates them
+from the survey. Breaklines are excluded by default, because one imported with surveyed levels does
+shape the surface - name them in `--kinds` to include them. It reports every line it touches and
+reminds you that existing TIN runs are snapshots.
+
+## Seeing the triangulation
+
+`Triangle edges` is a layer of its own in the Terrain group, not a style of the surface: you want the
+mesh *with* the shading, or alone over the base map, so it has its own visibility and survives the
+surface being switched off. `MapLayers.addTinPart()` builds one `LINES` primitive per mesh part (three
+sides per triangle, `tinEdgeLines` keeps the tally because Cesium releases the geometry), with the
+vertices lifted `EDGE_LIFT` metres in the project's vertical axis - coplanar lines z-fight with the
+faces they belong to, which is why the old `wire` surface style looked like it did nothing. Building
+the edges costs index memory, so it happens only when the layer is on; switching it on for the first
+time re-reads the run, and after that it is a visibility flag. The `wire` style option is gone.
+
+## Plan tools and pointer shapes
+
+The road plan (`web/src/modules/road/plan.ts`) carries a tool: **select / move**, **pan**, **zoom**
+or **delete node**, chosen from the palette above the plan or with `S` `P` `Z` `D`. The pointer says
+what the next click will do - `move` over a draggable node, `grab` / `grabbing` while panning,
+`zoom-in` under the zoom tool, `not-allowed` when the delete tool is not over a node - so the state
+of the editor is visible rather than remembered. Zoom clicks in, Alt-clicks out and drags a box.
+Deleting is refused below two IPs and only offered on the Alignment stage. On the longitudinal
+profile a PVI shows `move`, except the first and last, which show `ns-resize` because they are
+pinned in chainage. The 3-D terrain map uses the same grab / grabbing pair (through
+`Interaction.idleCursor`, because Cesium's own move handler rewrites the cursor every frame).
+
+Arming a tool from the keyboard has to be recoverable: the plan's status line names the tool in
+hand, `Esc` returns to Select from any of them, and deleting a node asks first. Moving an IP redraws
+the cross-section against the new centre line, debounced, because sampling the ground is a heavy
+request and firing one per drag frame starves the save that follows it.
+
 ## Keyboard
 
 `web/src/ui/keys.ts` is a small layered shortcut registry: a screen registers a set of bindings and
@@ -122,6 +196,23 @@ beneficiary in both workspaces (step, jump ten, first / last, go to a typed chai
 width), along with digits for panels and design stages, `Ctrl+S` on a road design, and the sheet
 viewer. `node e2e/keys_check.mjs <url> <terrainProject> [roadProject]` drives all of it in a browser,
 including the rule that typing in a box must not move the view.
+
+## Structures on a cross-section
+
+A wall stands on the ground. `section_structures()` anchors each one where it belongs in the section
+- a retaining or breast wall with its face on the shoulder hinge and its base on the ground below,
+a toe or catch wall at the daylight point - and for the two whose purpose is to span hinge to ground
+it draws the drop the section actually needs, naming the recorded height beside it when the two
+disagree. Anchoring on `hinge_z - recorded_height` instead left a 4.5 m wall floating twenty metres
+above a 24.7 m fill.
+
+`plm.design.structures.section_structures(sec, structures)` places every wall and drain that covers
+a chainage into section coordinates (offset from the centre line, RL) - the wall body polygon, its
+dashed foundation, the drain channel, and where the label goes. The DXF / SVG sheet renderer and the
+browser's cross-section pane both call it, so the screen and the drawing cannot disagree; it also
+carries the rules that only the placement knows (a drain inside the formation is left to the
+template ditch, a drain off the surveyed ground is dropped). `/corridor/section` returns it as
+`structures`, and `web/src/charts/section.ts` draws it.
 
 ## Visitor register and usage log
 

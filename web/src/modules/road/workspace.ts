@@ -9,12 +9,13 @@ import { api, ApiError, type Design, type ModuleInfo, type Project, type Profile
 import { renderProfile } from "../../charts/profile";
 import { renderSection } from "../../charts/section";
 import { helpBinding, registerShortcuts, showShortcutHelp } from "../../ui/keys";
+import { clearSelection, mountInspector, ro, selectElement } from "../../ui/selection";
 import { store, toast } from "../../state";
 import { button, el, fmt, fmtChainage, parseChainage, select } from "../../ui/dom";
 import { renderModuleSwitcher } from "../../ui/moduleSwitcher";
 import type { ModuleContext, ModuleInstance } from "../registry";
 import { designHash, terrainHash } from "../registry";
-import { PlanView, type PlanLayer } from "./plan";
+import { PLAN_TOOLS, PlanView, type PlanLayer, type PlanTool } from "./plan";
 import { renderAlignmentStage, renderEarthworksStage, renderOutputStage, renderProfileStage, renderStructuresStage, renderTemplatesStage } from "./stages";
 
 export async function openRoadWorkspace(ctx: ModuleContext): Promise<ModuleInstance> {
@@ -61,6 +62,10 @@ export class RoadWorkspace implements ModuleInstance {
   private activeStage = "alignment";
   private sectionInterval = 20;
   private unregisterKeys: (() => void) | null = null;
+  private unmountInspector: (() => void) | null = null;
+  private sectionTimer: number | null = null;
+  /** only the newest showSection() may draw: a slow reply must not overwrite a newer one */
+  private sectionToken = 0;
   private halfWidth = 15;
   private centre: Centreline | null = null;
   private cursor: { x: number; y: number; dir: number } | null = null;
@@ -83,6 +88,9 @@ export class RoadWorkspace implements ModuleInstance {
     this.destroyed = true;
     this.unregisterKeys?.();
     this.unregisterKeys = null;
+    this.unmountInspector?.();
+    this.unmountInspector = null;
+    clearSelection();
     this.plan?.destroy();
     this.root.innerHTML = "";
   }
@@ -118,11 +126,19 @@ export class RoadWorkspace implements ModuleInstance {
     const centre = el("div", { class: "road-centre" }, planHost, profile);
     this.root.appendChild(el("div", { class: "app" }, top, el("div", { class: "road-workspace" }, this.stageHost, centre, right)));
 
+    this.unmountInspector = mountInspector(planHost);
     this.plan = new PlanView(planHost);
     this.plan.onMove = (x, y) => this.updateStatus(x, y);
-    this.plan.onLeave = () => { this.statusEl.textContent = "move over the plan"; };
-    this.plan.onClick = (x, y) => { const s = this.stationAt(x, y); if (s) void this.showSection(s.chainage); };
+    this.plan.onLeave = () => this.updateStatus();
+    this.plan.onClick = (x, y) => {
+      const hit = this.plan.hitHandle(...this.plan.toScreen(x, y));
+      if (hit && this.activeStage === "alignment") { this.selectIp(Number(hit.id.replace("ip", ""))); return; }
+      const s = this.stationAt(x, y);
+      if (s) void this.showSection(s.chainage);
+    };
     this.plan.onDrag = (id, x, y, phase) => this.onHandleDrag(id, x, y, phase);
+    this.plan.onDeleteHandle = (id) => this.deleteIp(id);
+    this.plan.onToolChange = () => { this.renderToolbar(); this.updateStatus(); };
     window.addEventListener("beforeunload", this.beforeUnload);
     this.unregisterKeys = registerShortcuts("Road design", this.shortcuts());
 
@@ -256,6 +272,8 @@ export class RoadWorkspace implements ModuleInstance {
         this.dragPreview = null;
         this.buildPlan();
         this.renderProfile();
+        // the centre line moved, so the cross-section at this station is of somewhere else now
+        this.refreshSection();
         if (this.activeStage === "alignment") this.renderStage();
       } catch (e) { err(e); }
     }, 120);
@@ -299,10 +317,40 @@ export class RoadWorkspace implements ModuleInstance {
     this.renderStage();
   }
 
+  /** An IP as a selection: the numbers an engineer sets on it. */
+  selectIp(i: number): void {
+    const p = this.editIps[i];
+    if (!p) return;
+    selectElement({
+      kind: "IP", id: i, label: `IP ${p.label || i}`,
+      subtitle: `intersection point ${i + 1} of ${this.editIps.length}`,
+      fields: [
+        { key: "x", label: "Easting", value: Number(Number(p.x).toFixed(3)), type: "number", unit: "m", step: 0.001 },
+        { key: "y", label: "Northing", value: Number(Number(p.y).toFixed(3)), type: "number", unit: "m", step: 0.001 },
+        { key: "radius", label: "Radius R", value: Number(p.radius || 0), type: "number", unit: "m", step: 5, min: 0,
+          hint: "0 means no curve. The checks compare R with the minimum for the class and design speed." },
+        { key: "spiral", label: "Transition Ls", value: Number(p.spiral || 0), type: "number", unit: "m", step: 5, min: 0 },
+        { key: "label", label: "Label", value: String(p.label ?? ""), type: "text" },
+      ],
+      apply: (v) => {
+        p.x = Number(v.x); p.y = Number(v.y);
+        p.radius = Number(v.radius) || 0;
+        p.spiral = Number(v.spiral) || 0;
+        p.label = String(v.label ?? "");
+        this.markDirty("horizontal");
+        this.previewHorizontal();
+        this.renderStage();
+        this.selectIp(i);
+        return `IP ${p.label || i} updated — save the alignment to keep it`;
+      },
+    });
+  }
+
   private onHandleDrag(id: string, x: number, y: number, phase: "start" | "move" | "end"): void {
     const i = Number(id.replace("ip", ""));
     const p = this.editIps[i];
     if (!p) return;
+    if (phase === "start") this.selectIp(i);
     if (phase === "move") {
       p.x = x; p.y = y;
       this.dragPreview = this.editIps.map((q) => [q.x, q.y]);
@@ -314,6 +362,22 @@ export class RoadWorkspace implements ModuleInstance {
       this.markDirty("horizontal");
       this.previewHorizontal();
     }
+  }
+
+  /** The delete tool on the plan removes an IP (the alignment still needs two). */
+  private deleteIp(id: string): void {
+    if (this.activeStage !== "alignment") { toast("Node editing is on the Alignment stage", "info"); return; }
+    const i = Number(id.replace("ip", ""));
+    if (!Number.isFinite(i) || !this.editIps[i]) return;
+    if (this.editIps.length <= 2) { toast("An alignment needs at least two IPs", "error"); return; }
+    const p = this.editIps[i];
+    if (!confirm(`Delete IP ${p.label || i}?  The alignment will be re-computed without it; Revert undoes it until you save.`)) return;
+    this.editIps.splice(i, 1);
+    toast(`IP ${p.label || i} deleted - save the alignment to keep it, or Revert to undo`, "ok");
+    this.markDirty("horizontal");
+    this.previewHorizontal();
+    this.buildPlan();
+    this.renderStage();
   }
 
   // ================================================================== actions: vertical
@@ -570,17 +634,31 @@ export class RoadWorkspace implements ModuleInstance {
     this.plan.layers = layers;
     // IP handles are draggable on the alignment stage
     this.plan.handles = this.activeStage === "alignment" ? this.editIps.map((p, i) => ({ id: `ip${i}`, x: p.x, y: p.y, label: p.label || String(i) })) : [];
-    // toolbar
+    this.renderToolbar();
+    this.updateStatus();
+    if (!this.plan.layers.length || this.plan.scale === 1) this.fitAll();
+    this.plan.requestRender();
+  }
+
+  /** Tool palette, layer chips and the fit buttons above the plan. */
+  private renderToolbar(): void {
     this.toolbar.innerHTML = "";
-    for (const l of layers.filter((x) => x.id !== "cursor")) {
+    const tools = el("div", { class: "tool-palette" });
+    for (const t of PLAN_TOOLS) {
+      const active = this.plan.tool === t.id;
+      const b = button(`${t.icon} ${t.label}`, () => this.plan.setTool(t.id), `tool-btn${active ? " active" : ""}`);
+      b.title = `${t.hint}  (${t.key})`;
+      if (t.id === "delete" && this.activeStage !== "alignment") { b.disabled = true; b.title = "Node editing is on the Alignment stage"; }
+      tools.appendChild(b);
+    }
+    this.toolbar.appendChild(tools);
+    for (const l of this.plan.layers.filter((x) => x.id !== "cursor")) {
       const cb = el("input", { type: "checkbox", checked: l.visible });
       cb.addEventListener("change", () => { l.visible = cb.checked; this.plan.requestRender(); });
       this.toolbar.appendChild(el("label", { class: "check chip" }, cb, l.label));
     }
     this.toolbar.appendChild(button("Fit", () => this.fitAll(), "btn small"));
     if (this.centre) this.toolbar.appendChild(button("Fit alignment", () => this.fitAlignment(), "btn small"));
-    if (!this.plan.layers.length || this.plan.scale === 1) this.fitAll();
-    this.plan.requestRender();
   }
 
   private fitted = false;
@@ -607,8 +685,16 @@ export class RoadWorkspace implements ModuleInstance {
     return { chainage: bch, offset: -boff, x: bx, y: by, dir: bdir };
   }
 
-  private updateStatus(x: number, y: number): void {
-    const parts = [`E ${fmt(x, 2)}`, `N ${fmt(y, 2)}`];
+  /** Coordinates under the pointer, always prefixed by the tool in hand. Called with no position
+   *  when only the tool changed, or when the pointer leaves the plan. */
+  private updateStatus(x?: number, y?: number): void {
+    const t = PLAN_TOOLS.find((k) => k.id === this.plan.tool);
+    const tool = t ? `${t.icon} ${t.label}` : "";
+    if (x === undefined || y === undefined) {
+      this.statusEl.textContent = t ? `${tool}  \u2014  ${t.hint}` : "move over the plan";
+      return;
+    }
+    const parts = [tool, `E ${fmt(x, 2)}`, `N ${fmt(y, 2)}`];
     const s = this.stationAt(x, y);
     if (s && Math.abs(s.offset) < 500) {
       parts.push(`CH ${fmtChainage(s.chainage)}`, `offset ${s.offset >= 0 ? "R" : "L"} ${fmt(Math.abs(s.offset), 2)}`);
@@ -661,6 +747,12 @@ export class RoadWorkspace implements ModuleInstance {
   // ================================================================== section
   setStation(ch: number): void { void this.showSection(ch); }
 
+  /** Redraw the current station shortly, collapsing a burst of edits into one request. */
+  refreshSection(delay = 400): void {
+    if (this.sectionTimer) window.clearTimeout(this.sectionTimer);
+    this.sectionTimer = window.setTimeout(() => { this.sectionTimer = null; void this.showSection(this.station); }, delay);
+  }
+
   async showSection(chainage: number): Promise<void> {
     const c = this.centre;
     // clamp first: the head below prints this.station, and printing it before the update showed
@@ -676,33 +768,39 @@ export class RoadWorkspace implements ModuleInstance {
       (() => { const w = select([10, 15, 20, 30, 50].map((v) => ({ value: String(v), label: `±${v} m` })), String(this.halfWidth)); w.addEventListener("change", () => { this.halfWidth = Number(w.value); void this.showSection(this.station); }); return w; })(),
     );
     if (!c || !this.run) { this.sectionEl.innerHTML = '<p class="muted" style="padding:20px">Needs a TIN run and an alignment.</p>'; return; }
+    const token = ++this.sectionToken;
+    const superseded = () => this.destroyed || token !== this.sectionToken;
     const s = pointAtChainage(c, this.station);
     if (!s) return;
     this.cursor = s;
     this.plan.requestRender();
     this.profileCursor?.(this.station);
     try {
-      if (this.data.corridor) {
+      // an unsaved alignment means the stored corridor belongs to the previous centre line, so fall
+      // through to the live ground section rather than draw yesterday's geometry at today's chainage
+      if (this.data.corridor && !this.dirty.has("horizontal")) {
         const sec = await api.road.section(this.pid, this.did, this.station);
-        if (this.destroyed) return;
+        if (superseded()) return;
         const ground: number[][] = sec.ground;
         const hw = Math.max(this.halfWidth, ...sec.design.map((p: number[]) => Math.abs(p[0])));
         const section: Section = { chainage: sec.chainage, label: fmtChainage(sec.chainage), centre: [sec.x, sec.y], direction: sec.direction, left: hw, right: hw,
           offset: ground.map((p) => p[0]), z: ground.map((p) => p[1]), xy: ground.map((p) => [sec.x + p[0] * Math.sin(sec.direction), sec.y - p[0] * Math.cos(sec.direction)]),
           source: ground.map((p) => (Math.abs(p[0]) < 1e-6 ? "centre" : "edge")) };
         renderSection(this.sectionEl, section, { vScale: 2, design: sec.design.map((p: number[]) => ({ offset: p[0], z: p[1] })),
+          structures: sec.structures || [],
           title: `CH ${fmtChainage(sec.chainage)} · ${sec.template_id} · cut ${fmt(sec.cut_area, 2)} m² · fill ${fmt(sec.fill_area, 2)} m²${sec.flags?.length ? " · " + sec.flags.join(", ") : ""}` });
         return;
       }
       const nx = -Math.sin(s.dir), ny = Math.cos(s.dir), hw = this.halfWidth;
       const line = [[s.x + nx * hw, s.y + ny * hw], [s.x, s.y], [s.x - nx * hw, s.y - ny * hw]];
       const r = await api.tin.profile(this.pid, this.run.id, line);
-      if (this.destroyed) return;
+      if (superseded()) return;
       const sec: Section = { chainage: this.station, label: fmtChainage(this.station), centre: [s.x, s.y], direction: s.dir, left: hw, right: hw,
         offset: r.distance.map((d) => d - hw), z: r.z, xy: r.xy, source: r.distance.map((d) => (Math.abs(d - hw) < 1e-6 ? "centre" : "edge")) };
       const v = this.data.vertical;
       const dz = v?.line?.length ? interpLine(v.line, this.station) : null;
-      renderSection(this.sectionEl, sec, { vScale: 2, formationLevel: dz ?? undefined, title: `CH ${fmtChainage(this.station)} · ground${dz != null ? ` · design RL ${fmt(dz, 2)} (build the corridor for the full section)` : ""}` });
+      const stale = this.dirty.has("horizontal") ? " · alignment unsaved: ground under the new centre line" : "";
+      renderSection(this.sectionEl, sec, { vScale: 2, formationLevel: dz ?? undefined, title: `CH ${fmtChainage(this.station)} · ground${dz != null ? ` · design RL ${fmt(dz, 2)} (build the corridor for the full section)` : ""}${stale}` });
     } catch (e) {
       this.sectionEl.innerHTML = `<p class="error" style="padding:20px">${e instanceof ApiError ? e.detail : String(e)}</p>`;
     }
@@ -736,8 +834,12 @@ export class RoadWorkspace implements ModuleInstance {
         keys: [String(n)], label: `Stage ${n}: ${(this.module?.stages || [])[n - 1]?.label ?? "-"}`, group: "Stages",
         run: () => stageAt(n - 1),
       })),
+      ...PLAN_TOOLS.map((t) => ({
+        keys: [t.key.toLowerCase()], label: `${t.label} tool \u2014 ${t.hint}`, group: "Plan tools",
+        run: () => this.plan.setTool(t.id as PlanTool),
+      })),
       { keys: ["mod+s"], label: "Save everything unsaved on this design", group: "Design", whileTyping: true, run: () => void this.saveDirty() },
-      { keys: ["escape"], show: "Esc", label: "Back to the terrain workspace", group: "Design", run: () => { location.hash = terrainHash(this.pid); } },
+      { keys: ["escape"], show: "Esc", label: "Back to the Select / move tool", group: "Plan tools", run: () => this.plan.setTool("select") },
     ];
   }
 

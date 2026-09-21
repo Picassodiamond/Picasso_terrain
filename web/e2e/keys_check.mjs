@@ -24,15 +24,45 @@ const step = async (name, fn) => { process.stdout.write(`- ${name} ... `); await
 const key = async (k) => { await page.keyboard.press(k); await page.waitForTimeout(350); };
 const station = () => page.locator(".charts .chart-head .mono").first().innerText();
 
+/** Generate a section set so the check does not depend on what other checks left behind. */
+async function makeSectionSet() {
+  const [als, runs] = await Promise.all([j(`/api/projects/${tpid}/alignments`), j(`/api/projects/${tpid}/tin`)]);
+  if (!als.length || !runs.length) throw new Error("the terrain project needs an alignment and a TIN run");
+  const post = async (url, body) => {
+    const r = await fetch(base + url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(`${url}: ${r.status} ${await r.text()}`);
+    return r.json();
+  };
+  console.log("\n    no section set: generating one ...");
+  let job = await post(`/api/projects/${tpid}/sections`, {
+    alignment_id: als[0].id, run_id: runs[runs.length - 1].id, interval: 20, profile_interval: 10, left: 15, right: 15,
+  });
+  for (let i = 0; i < 120 && (job.status === "pending" || job.status === "running"); i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    job = await j(`/api/jobs/${job.id}`);
+  }
+  if (job.status !== "done") throw new Error(`section job ${job.status}: ${job.error || ""}`);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForSelector(".workspace", { timeout: 60000 });
+  await page.waitForTimeout(1500);
+  return j(`/api/projects/${tpid}/sections`);
+}
+
 // ------------------------------------------------------------------ terrain workspace
 await step("terrain: open and show the charts", async () => {
   await page.goto(`${base}/#/p/${tpid}`, { waitUntil: "networkidle" });
   await page.waitForSelector(".workspace", { timeout: 60000 });
-  const sets = await j(`/api/projects/${tpid}/sections`);
-  if (!sets.length) throw new Error("this project has no section set - generate one first");
-  await page.evaluate((id) => window.__plm.showCharts(true) ?? id, sets[0].id);
-  await page.waitForTimeout(1200);
-  if (!(await station()).includes("CH")) throw new Error(`no station shown: "${await station()}"`);
+  let sets = await j(`/api/projects/${tpid}/sections`);
+  if (!sets.length) sets = await makeSectionSet();
+  // pick the set the way a user does: Sections panel, click the card. Relying on whatever the
+  // workspace happened to have selected made this check depend on the order the others ran in.
+  await page.keyboard.press("5");
+  await page.waitForTimeout(500);
+  await page.locator(".panel .card.clickable").first().click();
+  await page.waitForFunction(() => {
+    const el = document.querySelector(".charts .chart-head .mono");
+    return !!el && el.textContent.includes("CH");
+  }, null, { timeout: 30000 });
 });
 
 let first = "";

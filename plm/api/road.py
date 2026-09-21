@@ -15,7 +15,7 @@ from ..design.corridor import build_corridor
 from ..design.horizontal import check_horizontal, curve_table
 from ..design.standards import Standard, list_standards, load_standard
 from ..design.structures import (STRUCTURE_KINDS, bill_of_quantities, catalogue as structure_catalogue, check_structures,
-                                 normalise_structure, suggest_culverts, suggest_drains, suggest_walls)
+                                 normalise_structure, section_structures, suggest_culverts, suggest_drains, suggest_walls)
 from ..design.superelevation import SuperelevationProfile, build_profile
 from ..design.template import component_catalogue, default_template, normalise_template, validate_templates
 from ..design.vertical import VerticalAlignment, stretch_pvis, trim_pvis
@@ -468,7 +468,11 @@ def corridor_section(store: ProjectStore, design: dict, chainage: float) -> dict
     if not secs:
         return None
     k = int(np.argmin([abs(s["chainage"] - chainage) for s in secs]))
-    return secs[k]
+    sec = dict(secs[k])
+    # walls, drains and culverts that cover this chainage, placed in section coordinates, so the
+    # browser draws exactly what the drawing sheets draw
+    sec["structures"] = section_structures(sec, structures_doc(store, design))
+    return sec
 
 
 # ---------------------------------------------------------------------- structures

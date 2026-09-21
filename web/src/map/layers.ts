@@ -1,4 +1,6 @@
-/** Map layers: points, lines, TIN mesh, contours, alignment, sections, comment pins, hover marker. */
+/** Map layers: points, lines, TIN mesh and its triangulation, contours, alignment, sections,
+ *  comment pins, hover marker. */
+export interface TinStyle { mode: "ramp" | "flat"; opacity: number }
 import * as Cesium from "cesium";
 import type { Alignment, Comment, ContourStyle, FeatureCollection } from "../api";
 import { fmtChainage } from "../ui/dom";
@@ -12,7 +14,8 @@ export type PickId =
   | { type: "ip"; index: number }
   | { type: "comment"; id: string }
   | { type: "section"; index: number }
-  | { type: "line"; fid: number; kind: string; source?: string };
+  | { type: "line"; fid: number; kind: string; source?: string }
+  | { type: "vertex"; index: number };
 
 const LINE_COLORS: Record<string, string> = { feature: "#38bdf8", boundary: "#e879f9", void: "#fb923c", contour: "#a3e635" };
 
@@ -75,15 +78,23 @@ export class MapLayers {
   keyPointLabels = new Cesium.LabelCollection();
   sections = new Cesium.PolylineCollection();
   markers = new Cesium.PointPrimitiveCollection();
+  /** vertices of the constraint line being edited, draggable */
+  editVertices = new Cesium.PointPrimitiveCollection();
   commentPins = new Cesium.PointPrimitiveCollection();
   commentLabels = new Cesium.LabelCollection();
   issuePins = new Cesium.PointPrimitiveCollection();
   /** dashed previews of suggested constraints while the user reviews them */
   suggestions = new Cesium.PolylineCollection();
   rejected: Cesium.Primitive | null = null;
+  private editLinePl: Cesium.Polyline | null = null;
   /** TIN surface primitives: one for a small mesh, one per tile for a big one */
   tinParts: Cesium.Primitive[] = [];
+  /** the triangulation itself, one LINES primitive per mesh part (built only when asked for) */
   tinWires: Cesium.Primitive[] = [];
+  /** how far the edges are lifted above the faces, in project metres, to stop them z-fighting */
+  static readonly EDGE_LIFT = 0.25;
+  /** triangle sides drawn across all wire parts (Cesium releases the geometry, so keep the tally) */
+  tinEdgeLines = 0;
   get tin(): Cesium.Primitive | null { return this.tinParts[0] ?? null; }
   /** point cloud primitive used above PICKABLE_POINTS (single draw call, not pickable) */
   pointsBig: Cesium.Primitive | null = null;
@@ -212,17 +223,18 @@ export class MapLayers {
     for (const p of this.tinWires) this.scene.primitives.remove(p);
     this.tinParts = [];
     this.tinWires = [];
+    this.tinEdgeLines = 0;
     this.scene.requestRender();
   }
 
   /** mesh.bin -> shaded primitive with per-vertex colours (replaces any previous surface). */
-  setTin(buf: ArrayBuffer | null, style: { mode: "ramp" | "flat" | "wire"; opacity: number }, zRangeOverride?: [number, number]): void {
+  setTin(buf: ArrayBuffer | null, style: TinStyle, zRangeOverride?: [number, number], edges = false): void {
     this.clearTin();
-    if (buf) this.addTinPart(buf, style, zRangeOverride);
+    if (buf) this.addTinPart(buf, style, zRangeOverride, edges);
   }
 
   /** Add one mesh (a whole TIN or one tile of a big one). Pass the run's z range so tiles share one colour ramp. */
-  addTinPart(buf: ArrayBuffer, style: { mode: "ramp" | "flat" | "wire"; opacity: number }, zRangeOverride?: [number, number]): void {
+  addTinPart(buf: ArrayBuffer, style: TinStyle, zRangeOverride?: [number, number], edges = false): void {
     const dv = new DataView(buf);
     if (String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)) !== "PLMM") throw new Error("bad mesh");
     const n = dv.getUint32(8, true);
@@ -292,26 +304,62 @@ export class MapLayers {
     });
     this.tinParts.push(prim);
     this.scene.primitives.add(prim);
-    if (style.mode === "wire") {
+    if (edges) {
+      // one line per triangle side; the shared sides are drawn twice, which costs nothing here and
+      // keeps the index simple
       const wireIdx = new Uint32Array(m * 6);
       for (let t = 0; t < m; t++) {
         const a = indices[t * 3], b = indices[t * 3 + 1], c2 = indices[t * 3 + 2];
         wireIdx.set([a, b, b, c2, c2, a], t * 6);
       }
-      const wc = new Uint8Array(n * 4).fill(255);
-      for (let i = 0; i < n; i++) { wc[i * 4] = 250; wc[i * 4 + 1] = 204; wc[i * 4 + 2] = 21; }
+      // the same vertices, lifted in the project's vertical axis so the lines sit on top of the faces
+      const lifted = new Float64Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        const c = this.c(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2] + MapLayers.EDGE_LIFT);
+        lifted[i * 3] = c.x; lifted[i * 3 + 1] = c.y; lifted[i * 3 + 2] = c.z;
+      }
+      const wc = new Uint8Array(n * 4);
+      for (let i = 0; i < n; i++) { wc[i * 4] = 56; wc[i * 4 + 1] = 189; wc[i * 4 + 2] = 248; wc[i * 4 + 3] = 255; }
       const wattrs = new Cesium.GeometryAttributes() as any;
-      wattrs.position = new Cesium.GeometryAttribute({ componentDatatype: Cesium.ComponentDatatype.DOUBLE, componentsPerAttribute: 3, values: positions });
+      wattrs.position = new Cesium.GeometryAttribute({ componentDatatype: Cesium.ComponentDatatype.DOUBLE, componentsPerAttribute: 3, values: lifted });
       wattrs.color = new Cesium.GeometryAttribute({ componentDatatype: Cesium.ComponentDatatype.UNSIGNED_BYTE, componentsPerAttribute: 4, normalize: true, values: wc });
       const wgeom = new Cesium.Geometry({
         attributes: wattrs,
-        indices: wireIdx, primitiveType: Cesium.PrimitiveType.LINES, boundingSphere: geometry.boundingSphere,
+        indices: wireIdx, primitiveType: Cesium.PrimitiveType.LINES,
+        boundingSphere: Cesium.BoundingSphere.fromVertices(Array.from(lifted)),
       });
       const wire = new Cesium.Primitive({ geometryInstances: new Cesium.GeometryInstance({ geometry: wgeom }),
         appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: false }), asynchronous: false, allowPicking: false });
       this.tinWires.push(wire);
+      this.tinEdgeLines += m * 3;
       this.scene.primitives.add(wire);
     }
+    this.scene.requestRender();
+  }
+
+  /** The constraint line being edited: the line itself picked out, and a handle on every vertex.
+   *  Pass null to leave edit mode. Handles carry a `vertex` pick id so the map can drag them. */
+  setEditLine(coords: number[][] | null, kind: string, zAt: (x: number, y: number) => number, selected = -1): void {
+    this.editVertices.removeAll();
+    if (this.editLinePl) { this.lines.remove(this.editLinePl); this.editLinePl = null; }
+    if (!coords || coords.length < 2) { this.scene.requestRender(); return; }
+    const colour = LINE_COLORS[kind] || "#38bdf8";
+    this.editLinePl = this.lines.add({
+      positions: coords.map((c) => this.c(c[0], c[1], (c[2] ?? zAt(c[0], c[1])) + 0.7)), width: 4,
+      material: Cesium.Material.fromType("Color", { color: Cesium.Color.fromCssColorString(colour) }),
+    });
+    coords.forEach((c, i) => {
+      // a closed ring repeats its first vertex last: one handle for the two, or dragging one
+      // corner of a boundary would tear it open
+      if (i === coords.length - 1 && coords.length > 2 && Math.abs(c[0] - coords[0][0]) < 1e-9 && Math.abs(c[1] - coords[0][1]) < 1e-9) return;
+      this.editVertices.add({
+        position: this.c(c[0], c[1], (c[2] ?? zAt(c[0], c[1])) + 0.8),
+        pixelSize: i === selected ? 14 : 11,
+        color: Cesium.Color.fromCssColorString(i === selected ? "#fbbf24" : "#f8fafc"),
+        outlineColor: Cesium.Color.fromCssColorString("#0f172a"), outlineWidth: 2,
+        disableDepthTestDistance: FAR, id: { type: "vertex", index: i } as PickId,
+      });
+    });
     this.scene.requestRender();
   }
 
@@ -530,9 +578,10 @@ export class MapLayers {
       const id = (pl as any).id as PickId | undefined;
       if (id && id.type === "line") pl.show = kindShow[id.kind] ?? true;
       else if (pl === this.hull) pl.show = v.tinHull;
+      else if (pl === this.editLinePl) pl.show = true;
     }
     for (const p of this.tinParts) p.show = v.tin;
-    for (const p of this.tinWires) p.show = v.tin;
+    for (const p of this.tinWires) p.show = v.tinEdges;
     this.issuePins.show = v.tinIssues;
     if (this.rejected) this.rejected.show = v.tinRejected;
     this.contours.show = v.contours;

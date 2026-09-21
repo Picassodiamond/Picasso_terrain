@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from ...engine.alignment import format_chainage
-from ..structures import STRUCTURE_KINDS, drain_section, wall_section
+from ..structures import section_structures, structures_at  # noqa: F401  (structures_at re-exported)
 from .frame import DrawingInputs, SheetSettings, draw_frame, drawing_number
 from .model import Sheet
 
@@ -163,66 +163,24 @@ def _draw_section(sheet: Sheet, sec: dict, cx: float, cy: float, k: float, o_min
                        align="right" if side == "left" else "left")
 
 
-def structures_at(structures, chainage: float, tol: float = 0.5) -> list[tuple[dict, str]]:
-    """(structure, side) pairs that cover this chainage; a structure on both sides yields two."""
-    out = []
-    for s in structures or ():
-        if float(s["from"]) - tol <= chainage <= float(s["to"]) + tol:
-            side = s.get("side")
-            for sd in (("left", "right") if side == "both" else ((side,) if side else ())):
-                out.append((s, sd))
-    return out
-
-
 def draw_structures(sheet: Sheet, sec: dict, structures, X, Y, t: dict) -> None:
-    """Wall bodies and drain channels on one cross-section, anchored on that side's hinge or
-    daylight point. Walls: the face sits at the hinge and the body leans outward; drains: the
-    channel invert sits on the ground line at its offset."""
+    """Wall bodies and drain channels on one cross-section. The placement is worked out by
+    `plm.design.structures.section_structures`, which the browser's cross-section pane also calls,
+    so the drawing and the screen cannot disagree."""
     tiny = t.get("tiny", 1.5)
-    g = np.asarray(sec.get("ground") or [], float)
-    design = sec.get("design") or []
-
-    def ground_z(o: float) -> float | None:
-        if not len(g) or o < g[:, 0].min() - 1e-6 or o > g[:, 0].max() + 1e-6:
-            return None
-        return float(np.interp(o, g[:, 0], g[:, 1]))
-
-    for s, side in structures_at(structures, float(sec["chainage"])):
-        kind, p = s["kind"], s.get("params") or {}
-        spec = STRUCTURE_KINDS.get(kind, {})
-        group = spec.get("group")
-        sd = sec.get(side) or {}
-        sgn = -1.0 if side == "left" else 1.0
-        if group == "wall":
-            h = float(p.get("height") or abs(sd.get("height") or 0) or 1.0)
-            sec_w = wall_section(str(p.get("type")), h, p.get("foundation_depth"), p.get("batter"))
-            hinge_o, hinge_z = float(sd.get("hinge_offset") or sgn * 4.0), float(sd.get("hinge_z") or sec.get("design_z") or 0.0)
-            base_z = hinge_z - h if kind in ("retaining_wall", "toe_wall") else (ground_z(hinge_o + sgn * 1.0) or hinge_z)
-            pts = [(hinge_o + sgn * x, base_z + y) for x, y in sec_w["points"]]
-            sheet.poly([(X(o), Y(z)) for o, z in pts], "WALL", closed=True, width=0.5)
-            sheet.hatch([(X(o), Y(z)) for o, z in pts], "WALL", pattern="ANSI31", opacity=0.3)
-            fd = sec_w["foundation"]
-            fx = [hinge_o, hinge_o + sgn * fd["width"]]
-            sheet.poly([(X(fx[0]), Y(base_z)), (X(fx[1]), Y(base_z)), (X(fx[1]), Y(base_z - fd["depth"])), (X(fx[0]), Y(base_z - fd["depth"]))], "WALL", closed=True, dashed=True)
-            lab_o = hinge_o + sgn * (sec_w["base_width"] + 0.6)
-            sheet.text(X(lab_o), Y(base_z + h / 2), f"{spec.get('label', kind).split(' (')[0]} {h:.1f} m", tiny, 0.0, "WALL",
-                       "left" if side == "right" else "right", "middle")
-        elif group == "drain":
-            w = float(p.get("width") or 0.6)
-            dep = float(p.get("depth") or 0.5)
-            dsec = drain_section(str(p.get("type")), w, dep)
-            base = sd.get("catch_offset") if sd.get("catch_offset") is not None else sd.get("hinge_offset")
-            extra = float(p.get("offset") or 0.0) if kind == "catch_drain" else 0.6
-            centre = float(base if base is not None else sgn * 4.0) + sgn * (extra + dsec["top_width"] / 2)
-            top_z = ground_z(centre)
-            if top_z is None:
-                continue
-            invert = top_z - dep
-            pts = [(centre + x, invert + y) for x, y in dsec["points"]]
-            if len(design) and min(o for o, _ in pts) > min(o for o, _ in design) and max(o for o, _ in pts) < max(o for o, _ in design):
-                continue                      # inside the formation: the template ditch already shows it
-            sheet.poly([(X(o), Y(z)) for o, z in pts], "DRAIN", width=0.35)
-            sheet.text(X(centre), Y(invert - 0.3), spec.get("label", kind).split(" (")[0], tiny, 0.0, "DRAIN", "center", "top")
+    for item in section_structures(sec, structures):
+        pts = [(X(o), Y(z)) for o, z in item["points"]]
+        if item["group"] == "wall":
+            sheet.poly(pts, "WALL", closed=True, width=0.5)
+            sheet.hatch(pts, "WALL", pattern="ANSI31", opacity=0.3)
+            if item.get("foundation"):
+                sheet.poly([(X(o), Y(z)) for o, z in item["foundation"]], "WALL", closed=True, dashed=True)
+            lo, lz = item["label_at"]
+            sheet.text(X(lo), Y(lz), item["label"], tiny, 0.0, "WALL", "left" if item["side"] == "right" else "right", "middle")
+        else:
+            sheet.poly(pts, "DRAIN", width=0.35)
+            lo, lz = item["label_at"]
+            sheet.text(X(lo), Y(lz), item["label"], tiny, 0.0, "DRAIN", "center", "top")
 
 
 def section_sheets(inp: DrawingInputs, st: SheetSettings) -> list[Sheet]:

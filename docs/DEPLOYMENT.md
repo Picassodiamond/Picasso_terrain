@@ -89,7 +89,8 @@ Guests never export and their jobs queue behind accounts.
 | `PLM_CORS_ORIGINS` | `*` | set it to your own origin when the front end is served from the same host. |
 
 Command line: `python -m plm.admin create-user <name> --role admin|editor|viewer`, `set-password`,
-`list-users`, `list-projects`, `backup`.
+`list-users`, `list-projects`, `backup`, `flatten-constraints` (drop the levels from stored boundary
+and void rings - they are plan geometry and the engine interpolates a vertex level from the survey).
 
 ---
 
