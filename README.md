@@ -127,11 +127,21 @@ follows it. `web/e2e/selection_check.mjs` drives a vertex, an IP and a wall thro
 
 ## Editing a constraint line
 
+The terrain map opens in **plan** (`SceneMode.SCENE2D`); the View selector morphs to 3D or 2.5D when
+the shape of the ground matters. Constraint lines are draped onto the surface in 3-D
+(`MapLayers.setLines` falls back to `zAt` when a vertex carries no level), so a boundary follows the
+ground rather than sitting at RL 0 far below it.
+
 Constraint lines are **plan geometry**: the editor asks for Easting and Northing only. The engine
 already treats a constraint vertex whose Z is 0 or NaN as "interpolate me from the survey surface"
 (`surface_z`), which is what a boundary or a void has always needed. A breakline imported with
 surveyed levels does shape the surface, so a plan edit carries the old level over to every vertex it
 did not move and leaves 0 on the ones it did (`_carry_levels`).
+
+`lines.geojson` serves a line that carries no level with **two** ordinates rather than three with a
+zero: `(x, y, 0)` claims a level of zero, which is a different statement from "no level", and the
+absence is exactly what tells the engine to interpolate that vertex from the survey surface. A
+breakline with surveyed levels still comes back three-dimensional.
 
 `PATCH /api/projects/{id}/lines/{fid}` takes a JSON body (`LinePatchIn`) whose `coords` replace the
 vertices; the older query-parameter form for kind / layer / name still works. `ProjectStore.update_line`

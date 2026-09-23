@@ -31,6 +31,9 @@ export class MapViewer {
       timeline: false,
       geocoder: false,
       homeButton: false,
+      // plan is the normal case for survey and design work, so the map opens top-down;
+      // the View selector morphs to 3D / 2.5D when the shape of the ground matters
+      sceneMode: Cesium.SceneMode.SCENE2D,
       sceneModePicker: false,
       baseLayerPicker: false,
       navigationHelpButton: false,
@@ -112,13 +115,20 @@ export class MapViewer {
       this.flyToBounds(b, this.lastZRange, 0.8);
       return;
     }
-    const z = this.pickHeight;
-    const cartos = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].map(([x, y]) => Cesium.Cartographic.fromCartesian(this.frame.toCartesian(x, y, z)));
-    const rect = Cesium.Rectangle.fromCartographicArray(cartos);
-    const pad = Math.max(rect.width, rect.height) * 0.15;
-    rect.west -= pad; rect.east += pad; rect.south -= pad; rect.north += pad;
-    this.viewer.camera.setView({ destination: rect });
+    this.viewer.camera.setView({ destination: this.rectangleFor(b, this.lastZRange) });
     this.scene.requestRender();
+  }
+
+  /** The padded geographic rectangle a project-coordinate extent covers, for the flat scene modes. */
+  private rectangleFor(bounds: number[], zRange?: number[] | null): Cesium.Rectangle {
+    const [minx, miny, maxx, maxy] = bounds;
+    const z = zRange && zRange[0] != null ? (zRange[0] + (zRange[1] ?? zRange[0])) / 2 : this.pickHeight;
+    const cartos = [[minx, miny], [maxx, miny], [maxx, maxy], [minx, maxy]]
+      .map(([x, y]) => Cesium.Cartographic.fromCartesian(this.frame.toCartesian(x, y, z)));
+    const rect = Cesium.Rectangle.fromCartographicArray(cartos);
+    const pad = Math.max(rect.width, rect.height, 1e-6) * 0.12;
+    rect.west -= pad; rect.east += pad; rect.south -= pad; rect.north += pad;
+    return rect;
   }
 
   /** Fly to a bounding box in project coordinates. */
@@ -127,11 +137,10 @@ export class MapViewer {
     this.lastBounds = bounds;
     this.lastZRange = zRange;
     if (this.scene.mode !== Cesium.SceneMode.SCENE3D) {
-      const [minx, miny, maxx, maxy] = bounds;
-      const z = zRange && zRange[0] != null ? (zRange[0] + (zRange[1] ?? zRange[0])) / 2 : 0;
-      const sphere = Cesium.BoundingSphere.fromPoints([this.frame.toCartesian(minx, miny, z), this.frame.toCartesian(maxx, maxy, z), this.frame.toCartesian(minx, maxy, z), this.frame.toCartesian(maxx, miny, z)]);
-      sphere.radius = Math.max(sphere.radius * 1.1, 30);
-      this.viewer.camera.flyToBoundingSphere(sphere, { duration, offset: new Cesium.HeadingPitchRange(0, -Cesium.Math.PI_OVER_TWO, sphere.radius * 2.5) });
+      // Plan and Columbus view frame a rectangle. A bounding sphere viewed from 2.5 times its own
+      // radius is right for a perspective camera and far too wide for an orthographic one - it left
+      // the survey as a postage stamp in the middle of an empty map.
+      this.viewer.camera.flyTo({ destination: this.rectangleFor(bounds, zRange), duration });
       return;
     }
     const [minx, miny, maxx, maxy] = bounds;

@@ -36,6 +36,7 @@
   <a href="#sections">Profile and cross-sections</a>
   <a href="#export">Export</a>
   <a href="#large">Large surveys</a>
+  <a href="#view">Plan, 3-D and 2.5-D</a>
   <a href="#editlines">Editing a constraint line</a>
   <a href="#properties">Selecting and editing properties</a>
   <a href="#mesh">Looking at the triangulation</a>
@@ -144,6 +145,15 @@
 
 <h2 id="large">Large surveys</h2>
 <p>Surveys of several hundred thousand points work: points stream to the map in a compact binary form, the terrain is drawn in tiles and the TIN is cached on the server. Builds on large surveys queue behind other jobs; the panel shows your position and an estimate. If a build would not fit in the server's memory it is refused with a message instead of failing halfway.</p>
+
+<h2 id="view">Plan, 3-D and 2.5-D</h2>
+<p>The map opens in <b>plan</b> (2-D, north up), because that is how survey and design work is
+normally read. The <b>View</b> selector in the top bar switches to <b>3D</b> when the shape of the
+ground matters &mdash; looking along a valley, judging a fill slope &mdash; and <b>2.5D</b> for a
+tilted view that still keeps north up. Switching re-centres on your data.</p>
+<p>Constraint lines are plan geometry, so in 3-D they are draped over the terrain surface rather
+than drawn at a level of their own; that is why a boundary follows the ground instead of cutting
+through it.</p>
 
 <h2 id="editlines">Editing a constraint line</h2>
 <p>A breakline, boundary or void can be corrected after it is drawn or imported &mdash; you do not have

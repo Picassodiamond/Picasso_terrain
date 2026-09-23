@@ -58,6 +58,13 @@ Report failures with their output. Do not describe a result you have not seen.
   `web/` exits 127. Stop the old background task before starting a new one, or the port is taken.
 * Playwright: the 3-D map never settles, so use `dispatchEvent("click")` and
   `animations: "disabled"` on screenshots instead of waiting for actionability.
+* **`passenger_wsgi.py` straddles the server's fork, and both halves matter.** The FastAPI app and
+  the heavy imports (numpy, scipy, shapely, pyproj) are built at *import*, in the parent; the a2wsgi
+  wrapper is built per process on first request. A wrapper made before the fork leaves each worker
+  with a dead event-loop thread - the worker accepts the request and never answers, and LiteSpeed
+  returns "Request Timeout". Moving the imports after the fork instead makes the first request take
+  seconds and the server kills it mid-import (`KeyboardInterrupt` inside `numpy`). Test with a
+  fork: call the app, `os.fork()`, call it again in the child.
 
 ## 5. Domain conventions
 

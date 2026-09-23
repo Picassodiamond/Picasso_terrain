@@ -524,11 +524,20 @@ def points_geojson(store: ProjectStore, project_crs: str | None, out_crs: str | 
 
 
 def lines_geojson(store: ProjectStore, project_crs: str | None, out_crs: str | None, kind: str | None = None) -> dict:
+    """Constraint lines as GeoJSON.
+
+    A line whose vertices carry no level is emitted with two ordinates, not three with a zero: a
+    boundary or a void is plan geometry, and a breakline only has levels when it was surveyed with
+    them. Saying (x, y, 0) would claim a level of zero, which is a different thing from "no level" -
+    the engine reads the absence as "interpolate this vertex from the survey surface".
+    """
     feats = []
     for ln in store.lines(kind=kind):
         c = ln["coords"]
         xy = _transform(c[:, :2], project_crs, out_crs)
-        coords = np.column_stack([xy, c[:, 2]])
+        z = c[:, 2] if c.shape[1] > 2 else np.zeros(len(c))
+        has_levels = bool(np.any(np.isfinite(z) & (np.abs(z) > 1e-9)))
+        coords = np.column_stack([xy, z]) if has_levels else xy
         feats.append({"type": "Feature", "id": ln["fid"],
                       "geometry": {"type": "LineString", "coordinates": _rounded(coords, 6)},
                       "properties": {"fid": ln["fid"], "kind": ln["kind"], "layer": ln["layer"], "name": ln["name"], "closed": ln["closed"],

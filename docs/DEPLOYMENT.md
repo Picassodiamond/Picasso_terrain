@@ -99,6 +99,16 @@ and void rings - they are plan geometry and the engine interpolates a vertex lev
 Passenger runs WSGI; FastAPI is ASGI, so `passenger_wsgi.py` wraps it with `a2wsgi`. No WebSockets
 are used — the browser polls for activity — so nothing else is needed.
 
+**The entry point is written around the server's fork**, and it has to be. The application and the
+geometry imports are built when the module is imported, in the parent process; the `a2wsgi` wrapper
+is built per worker, on its first request. `a2wsgi` runs the ASGI application on an event loop in a
+background thread, and a thread does not survive `fork()` — a wrapper built in the parent leaves
+every worker holding a dead loop, so the worker accepts the request and never answers and the web
+server returns **"Request Timeout"** with the application looking perfectly healthy from the shell.
+Doing the opposite — importing numpy and friends inside the first request — makes that request
+take seconds, and the server kills it mid-import. If you change this file, prove it with a fork:
+call the application, `os.fork()`, and call it again in the child.
+
 ### 3.1 Build and upload
 
 On your own machine:
@@ -243,6 +253,7 @@ point before relying on sub-metre map alignment.
 | Symptom | Cause |
 |---|---|
 | 500 on every page, "Application failed to start" | read `~/plm/stderr.log` or the Passenger log the app screen links to; usually a missing dependency — re-run `deploy/install.sh`. |
+| The browser sits and then shows **"Request Timeout"**, while the app answers from the shell | the worker inherited a dead event loop across the fork. See the note in §3; `~/plm/stderr.log` shows children "killed by signal: 15". |
 | `/api/health` works but `/` is blank | `PLM_WEB_DIST` is unset or points at the wrong place. |
 | Every visitor shows the same address in the register | `PLM_TRUST_PROXY=0`, or a proxy that does not set `X-Forwarded-For`. |
 | Big triangulations never finish | the cron worker of §3.5 is missing, or `PLM_JOB_MODE` is not `worker`. |

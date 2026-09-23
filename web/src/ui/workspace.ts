@@ -131,7 +131,7 @@ export class Workspace {
       toast("This project uses a local grid (plain metres), so it cannot be placed on the Earth. In Settings either assign the real coordinate system (MUTM / UTM) or type the longitude/latitude of one known point to place the grid on the map.", "info");
       this.showTab("settings");
     } }, "Base map?");
-    const modeSel = select([{ value: "3D", label: "3D" }, { value: "2D", label: "2D" }, { value: "2.5D", label: "2.5D" }], "3D");
+    const modeSel = select([{ value: "2D", label: "2D" }, { value: "3D", label: "3D" }, { value: "2.5D", label: "2.5D" }], "2D");
     modeSel.addEventListener("change", () => this.mv.setSceneMode(modeSel.value as any));
     const heightSel = select(
       [{ value: "ground", label: "On base map" }, { value: "true", label: "True elevation" }],

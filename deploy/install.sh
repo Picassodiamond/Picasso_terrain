@@ -37,10 +37,22 @@ echo "   $DATA_DIR ready (mode $(stat -c '%a' "$DATA_DIR"))"
 
 echo
 echo "== proving the geometry engine on this machine"
-if python -m pytest -q "$APP_DIR/tests" -x --no-header 2>&1 | tail -5; then
-  echo "   tests passed"
+# One file at a time: the whole suite in a single interpreter segfaults on shared hosting (numpy,
+# scipy, triangle and many short-lived event loops in one process), while every file passes alone.
+failed=0
+for f in "$APP_DIR"/tests/test_*.py; do
+  if out=$(python -m pytest -q --no-header "$f" 2>&1); then
+    printf '   %-28s %s\n' "$(basename "$f")" "$(echo "$out" | grep -Eo '[0-9]+ passed[^,]*' | head -1)"
+  else
+    failed=$((failed + 1))
+    printf '!! %-28s FAILED\n' "$(basename "$f")" >&2
+    echo "$out" | tail -15 >&2
+  fi
+done
+if [ "$failed" -eq 0 ]; then
+  echo "   all test files passed"
 else
-  echo "!! tests failed - do not go live until this is understood" >&2
+  echo "!! $failed test file(s) failed - do not go live until this is understood" >&2
 fi
 
 echo

@@ -159,3 +159,26 @@ def test_an_explicit_level_still_wins(client, project):
     client.patch(f"/api/projects/{project}/lines/{fid}", json={"coords": [[0, 0, 150.0], [80, 80]]})
     coords, _ = _coords(client, project, fid)
     assert round(coords[0][2], 3) == 150.0 and round(coords[1][2], 3) == 110.0
+
+
+# ---------------------------------------------------------------- what the API claims
+def test_a_line_without_levels_is_served_as_plan_geometry(client, project):
+    """(x, y, 0) claims a level of zero; a plan line has *no* level, which is what tells the engine
+    to interpolate the vertex from the survey surface. So two ordinates, not three with a zero."""
+    fid = _add(client, project, "boundary", [[0, 0], [80, 0], [80, 80], [0, 80], [0, 0]])
+    coords, props = _coords(client, project, fid)
+    assert props["kind"] == "boundary"
+    assert all(len(c) == 2 for c in coords), f"a boundary should be plan geometry, got {coords[0]}"
+
+
+def test_a_breakline_with_surveyed_levels_keeps_all_three_ordinates(client, project):
+    fid = _add(client, project, "breakline", [[10, 10, 201.5], [90, 90, 203.5]])
+    coords, _ = _coords(client, project, fid)
+    assert all(len(c) == 3 for c in coords)
+    assert round(coords[0][2], 3) == 201.5
+
+
+def test_a_levelless_breakline_is_plan_geometry_too(client, project):
+    fid = _add(client, project, "breakline", [[5, 5], [60, 60]])
+    coords, _ = _coords(client, project, fid)
+    assert all(len(c) == 2 for c in coords)

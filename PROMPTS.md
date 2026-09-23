@@ -469,3 +469,63 @@ editable there as before - Easting and Northing on a vertex, R and Ls on an IP, 
 / parameters on a structure. Three bugs of my own on the way, all from the documented heredoc trap:
 two unicode escapes that did not match the source, and a `\n` that became a real newline inside a
 JavaScript template literal.
+
+### 47. "start terrain in 2d view , the boundary lines still have z level"
+**Interpretation.** Two things. (1) The terrain workspace should open in the 2-D (top) view rather
+than the 3-D globe, since plan work is the normal case. (2) A report that boundary lines still carry
+a level despite the flattening - check where that is actually true: the stored geometry, the GeoJSON
+the API hands out, or only the way the map drapes a plan line over the terrain surface. Fix the real
+one rather than the first plausible one.
+**Outcome.** (1) The Cesium viewer is created with `sceneMode: SCENE2D` and the View selector now
+lists 2D first, so the terrain workspace opens top-down; 3D and 2.5D are one click away. Checked the
+paths a scene-mode change puts at risk - the base map still loads (108 OSM tiles, none failed),
+picking, the height readout, drawing and every browser check pass in the new default. (2) The report
+was right, but not where it looked: the *stored* geometry was already flat (the flatten ran last
+turn), while `lines.geojson` kept emitting a third ordinate of `0.0`. That is a real difference -
+`(x, y, 0)` claims a level of zero, whereas a plan line has *no* level, and the absence is what tells
+the engine to interpolate the vertex from the survey surface. A line whose vertices carry no level is
+now served with two ordinates; a breakline with surveyed levels still comes back three-dimensional.
+Three tests pin the contract. The store keeps 3-D-with-zero rather than NaN, because the DXF export
+and the constraint builder read those coordinates directly and NaN would leak into drawings.
+
+### 48. "the himalayan host support team is asking for a screenshot of problem , can you check once more on cpanel deployement and provide a screenshot of problem"
+**Interpretation.** Re-check the state of the cPanel deployment now (it may have moved since the
+subdomain was re-created) and produce something the hosting support team can act on: a screenshot of
+what the site actually serves, plus the evidence that separates "the application is broken" from
+"the web server has no vhost for this subdomain". A picture of a browser error alone would not tell
+them which; the useful artefact pairs the browser view with the server-side facts.
+**Outcome.** No ticket was needed: the host had already done their part and the remaining fault was
+ours. Re-checking found the subdomain now has its own document root, a Let's Encrypt certificate
+issued on 21 September and its own domain logs - the vhost exists. What the browser actually
+received was LiteSpeed's **"Request Timeout"** page, not a 404, and `~/plm/stderr.log` was full of
+workers "killed by signal: 15", while the application answered 200 in 0.2 s when called in-process.
+A fork test settled it: parent 200 OK, child hung. `passenger_wsgi.py` built the a2wsgi wrapper at
+import, in the parent; a2wsgi runs the ASGI app on an event loop in a background thread, and threads
+do not survive `fork()`, so every worker held a dead loop and never answered. The first fix moved
+*everything* after the fork, which made the first request import numpy and got it killed mid-import
+(`KeyboardInterrupt`). The right split is application and heavy imports at module import, the
+wrapper per process. Deployed, restarted, and `deploy/check_live.py https://plm.nhb.com.np` now
+passes all seven checks; the site serves the shell, the help pages and the visitor form, and reads
+the real client address through `X-Forwarded-For`. The trap is recorded in `CLAUDE.md` section 4 and
+in the deployment guide, with the symptom in the troubleshooting table.
+
+### 49. "make it invite only , also deploy latest version"
+**Interpretation.** Two things on the live server: set `PLM_OPEN_REGISTRATION=0` so accounts are
+created by an administrator rather than by anyone who finds the URL (the first account is still
+allowed to bootstrap, otherwise no administrator could ever exist), and push the current build,
+which is three weeks of work ahead of what is deployed. Before pushing, finish and verify the 2-D
+framing fix left half-done at the end of the last session rather than deploying it untested.
+**Outcome.** Invite-only set on the server (`PLM_OPEN_REGISTRATION=0`, the other fifteen variables
+left as they were) and proved by asking the live site to register a second account: 403, "accounts
+are created by an administrator". One account already exists, so the bootstrap path is spent and the
+setting is safe. Before deploying, the 2-D framing left unfinished last session was checked rather
+than trusted: the blank map in that screenshot turned out to be a frame captured before the first
+paint - the camera height was already correct - and plan and 3-D both render properly, so
+`rectangleFor()` stands. Deployed with `deploy/remote_deploy.sh`; the live bundle is now
+`index-DkoORug8.js`, the help pages carry the new sections, and all seven live checks pass.
+One real finding on the way: the server's own test run **segfaulted**. The engine is fine there -
+100,000 points to 182,864 triangles in 3.9 s - and every test file passes on its own; only the whole
+suite in one interpreter dies, which is the harness (numpy, scipy, triangle and 158 short-lived
+event loops in one process), not the software. `deploy/install.sh` now runs the self-test file by
+file, so a deployment no longer ends in a frightening and meaningless "tests failed"; all sixteen
+files pass on the server.
